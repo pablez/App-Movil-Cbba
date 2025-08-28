@@ -1,0 +1,48 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Reglas para usuarios - solo pueden ver/editar sus propios datos
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Administradores pueden leer todos los usuarios
+    match /users/{document=**} {
+      allow read: if request.auth != null && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Reglas para viajes - pasajeros y conductores pueden ver sus viajes
+    match /trips/{tripId} {
+      allow read, write: if request.auth != null && 
+        (resource.data.passengerId == request.auth.uid || 
+         resource.data.driverId == request.auth.uid);
+      allow create: if request.auth != null;
+    }
+    
+    // Ubicaciones de conductores - todos pueden leer, solo el conductor puede escribir
+    match /driverLocations/{driverId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == driverId;
+    }
+    
+    // Pagos - solo el usuario propietario puede ver sus pagos
+    match /payments/{paymentId} {
+      allow read, write: if request.auth != null && 
+        resource.data.userId == request.auth.uid;
+    }
+    
+    // Vehículos - todos pueden leer, solo el conductor propietario puede gestionar
+    match /vehicles/{vehicleId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && 
+        resource.data.driverId == request.auth.uid;
+    }
+    
+    // Regla de fallback para desarrollo (remover en producción)
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
