@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, getReactNativePersistence, initializeAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { getFirestore, initializeFirestore, setLogLevel } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -30,7 +30,38 @@ try {
 }
 
 // Inicializar Firestore
-const db = getFirestore(app);
+// En React Native/Expo algunas conexiones de Firestore por WebChannel fallan.
+// Forzamos long-polling y desactivamos fetch streams para mayor compatibilidad.
+// Inicializar Firestore preferiblemente con long-polling (necesario en React Native/Expo)
+// Usamos una bandera global para evitar re-inicializar durante hot-reload
+let db;
+try {
+  if (!global.__RN_FIRESTORE_INITIALIZED) {
+    db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false });
+    global.__RN_FIRESTORE_INITIALIZED = true;
+  } else {
+    // Si ya se inicializó en otra ejecución, obtener la instancia existente
+    db = getFirestore(app);
+  }
+} catch (e) {
+  // Fallback si initializeFirestore falla por alguna razón
+  console.warn('initializeFirestore failed, falling back to getFirestore()', e);
+  db = getFirestore(app);
+}
+
+// Activar logs detallados en desarrollo para diagnosticar problemas de conexión
+try {
+  if (__DEV__) {
+    // Reducir ruido de logs en desarrollo
+    try {
+      setLogLevel('warn');
+    } catch (e) {
+      // algunos SDKs más antiguos pueden no soportar setLogLevel
+    }
+  }
+} catch (e) {
+  // ignore if setLogLevel not available
+}
 
 // Inicializar Storage
 const storage = getStorage(app);

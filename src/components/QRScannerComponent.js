@@ -10,14 +10,20 @@ import {
   TextInput
 } from 'react-native';
 
-// Importación condicional para evitar errores
-let BarCodeScanner;
-try {
-  BarCodeScanner = require('expo-barcode-scanner').BarCodeScanner;
-} catch (error) {
-  console.log('BarCodeScanner no disponible:', error);
-  BarCodeScanner = null;
-}
+// Lazy require to avoid crash when native module is absent
+let BarCodeScanner = null;
+const tryLoadBarCodeScanner = () => {
+  if (BarCodeScanner !== null) return BarCodeScanner;
+  try {
+    // require at runtime so bundlers/platforms without the native module won't fail import
+    // eslint-disable-next-line global-require
+    BarCodeScanner = require('expo-barcode-scanner').BarCodeScanner;
+  } catch (error) {
+    console.log('BarCodeScanner no disponible:', error?.message || error);
+    BarCodeScanner = null;
+  }
+  return BarCodeScanner;
+};
 
 const QRScannerComponent = ({ visible, onClose, onScan }) => {
   const [hasPermission, setHasPermission] = useState(null);
@@ -26,14 +32,21 @@ const QRScannerComponent = ({ visible, onClose, onScan }) => {
   const [showManualInput, setShowManualInput] = useState(false);
 
   useEffect(() => {
-    if (BarCodeScanner) {
+    const Scanner = tryLoadBarCodeScanner();
+    if (Scanner) {
       (async () => {
-        const { status } = await BarCodeScanner.requestPermissionsAsync();
-        setHasPermission(status === 'granted');
+        try {
+          const { status } = await Scanner.requestPermissionsAsync();
+          setHasPermission(status === 'granted');
+        } catch (permErr) {
+          console.log('BarCodeScanner permiso error:', permErr?.message || permErr);
+          setHasPermission(false);
+        }
       })();
     } else {
-      // Si no hay scanner disponible, mostrar input manual
+      // Si no hay scanner disponible, usar input manual
       setShowManualInput(true);
+      setHasPermission(false);
     }
   }, []);
 
@@ -92,7 +105,8 @@ const QRScannerComponent = ({ visible, onClose, onScan }) => {
   };
 
   // Si no hay scanner disponible o hay problemas, mostrar input manual
-  if (!BarCodeScanner || hasPermission === false || showManualInput) {
+  const ScannerAvailable = !!tryLoadBarCodeScanner();
+  if (!ScannerAvailable || hasPermission === false || showManualInput) {
     return (
       <Modal visible={visible} animationType="slide">
         <SafeAreaView style={styles.container}>
@@ -156,10 +170,15 @@ const QRScannerComponent = ({ visible, onClose, onScan }) => {
         </View>
 
         <View style={styles.scannerContainer}>
-          <BarCodeScanner
-            onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
-            style={styles.scanner}
-          />
+          {/* Use the loaded scanner instance; this avoids referencing a null import */}
+          {tryLoadBarCodeScanner() ? (
+            <BarCodeScanner
+              onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+              style={styles.scanner}
+            />
+          ) : (
+            <View style={styles.scanner} />
+          )}
           
           <View style={styles.overlay}>
             <View style={styles.scanArea} />

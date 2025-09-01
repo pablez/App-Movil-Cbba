@@ -11,7 +11,7 @@ import {
   orderBy, 
   onSnapshot 
 } from 'firebase/firestore';
-import { db } from '../config/firebase';
+import { db, auth } from '../config/firebase';
 
 // Servicio para gestionar usuarios
 export const UserService = {
@@ -55,6 +55,21 @@ export const UserService = {
   // Obtener todos los usuarios (solo para admin)
   getAllUsers: async () => {
     try {
+      // Comprobación cliente: asegurar que hay un usuario autenticado
+      if (!auth || !auth.currentUser) {
+        return { success: false, error: 'Usuario no autenticado' };
+      }
+
+      // Comprobar que el usuario actual tiene role 'admin' o 'ADMIN' en su documento
+      const meDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      if (!meDoc.exists()) {
+        return { success: false, error: 'Documento del usuario no encontrado' };
+      }
+      const myRole = meDoc.data()?.role;
+      if (!(myRole === 'admin' || myRole === 'ADMIN')) {
+        return { success: false, error: 'No tienes permisos para listar usuarios' };
+      }
+
       const usersSnapshot = await getDocs(collection(db, 'users'));
       const users = [];
       usersSnapshot.forEach(doc => {

@@ -28,22 +28,16 @@ const AdminDashboardScreen = ({ navigation }) => {
   const loadPendingUsers = async () => {
     setLoading(true);
     try {
-      console.log('🔍 Cargando usuarios pendientes...');
-      
-      // Buscar usuarios con status "pending" en lugar de isApproved
       const q = query(
         collection(db, 'users'),
-        where('status', '==', 'pending')
+        where('isApproved', '==', false)
       );
       
       const querySnapshot = await getDocs(q);
       const users = [];
       
-      console.log('📊 Documentos encontrados:', querySnapshot.size);
-      
       querySnapshot.forEach((doc) => {
         const userData = { id: doc.id, ...doc.data() };
-        console.log('👤 Usuario encontrado:', userData.firstName, userData.lastName, userData.status);
         users.push(userData);
       });
       

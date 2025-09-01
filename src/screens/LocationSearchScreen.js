@@ -50,12 +50,16 @@ const LocationSearchScreen = ({ navigation, route }) => {
 
   const getCurrentLocation = async () => {
     try {
+      console.log('📍 Obteniendo ubicación actual...');
       const result = await LocationService.getCurrentLocationWithAddress();
       if (result.success) {
+        console.log('✅ Ubicación actual obtenida:', result);
         setCurrentLocation(result);
+      } else {
+        console.warn('⚠️ No se pudo obtener la ubicación actual:', result.error);
       }
     } catch (error) {
-      console.log('No se pudo obtener la ubicación actual');
+      console.error('❌ Error obteniendo ubicación actual:', error);
     }
   };
 
@@ -117,13 +121,122 @@ const LocationSearchScreen = ({ navigation, route }) => {
     }
   };
 
-  const selectLocation = (place) => {
+  const selectLocation = async (place) => {
+    console.log('🎯 Lugar seleccionado:', place);
+    console.log('🔍 Debug - Estado actual:', {
+      hasCurrentLocation: !!currentLocation,
+      currentLocationData: currentLocation,
+      hasOnLocationSelect: !!onLocationSelect,
+      hasReturnScreen: !!route.params?.returnScreen,
+      routeParams: route.params
+    });
+    
     if (onLocationSelect) {
       onLocationSelect(place);
       navigation.goBack();
+    } else if (route.params?.returnScreen) {
+      // Navegar de regreso con el lugar seleccionado
+      navigation.navigate(route.params.returnScreen, { 
+        selectedPlace: place,
+        routeType: route.params?.routeType 
+      });
     } else {
-      // Navegar al mapa con la ubicación seleccionada
-      navigation.navigate('AdminMap', { selectedLocation: place });
+      // Calcular ruta óptima usando OpenRouteService Directions API
+      console.log('🛤️ Preparando cálculo de ruta...');
+      console.log('🔍 Verificando ubicación actual:', {
+        hasCurrentLocation: !!currentLocation,
+        hasLocationProperty: !!currentLocation?.location,
+        currentLocationStructure: currentLocation
+      });
+      
+      if (!currentLocation?.location) {
+        console.error('❌ Error: No hay ubicación actual disponible');
+        Alert.alert('Error', 'No se pudo obtener tu ubicación actual');
+        return;
+      }
+
+      console.log('🛣️ Calculando ruta óptima...');
+      console.log('📍 Origen:', currentLocation.location);
+      console.log('🎯 Destino:', place.coordinates);
+      setLoading(true);
+
+      try {
+        // Calcular ruta usando el servicio de enrutamiento
+        const routeResult = await LocationService.getOptimalRoute(
+          currentLocation.location,
+          place.coordinates,
+          'driving-car' // Perfil de conducción por defecto
+        );
+
+        console.log('📊 Resultado de ruta:', {
+          success: routeResult.success,
+          hasCoordinates: routeResult.coordinates?.length > 0,
+          pointsCount: routeResult.coordinates?.length,
+          distance: routeResult.distance ? `${(routeResult.distance / 1000).toFixed(2)} km` : 'N/A',
+          duration: routeResult.duration ? `${Math.round(routeResult.duration / 60)} min` : 'N/A'
+        });
+
+        const routeData = {
+          origin: {
+            latitude: currentLocation.location.latitude,
+            longitude: currentLocation.location.longitude,
+            name: 'Tu ubicación',
+            address: currentLocation.address?.formatted || 'Ubicación actual'
+          },
+          destination: {
+            latitude: place.coordinates.latitude,
+            longitude: place.coordinates.longitude,
+            name: place.name,
+            address: place.label || place.address?.locality || 'Destino'
+          },
+          selectedLocation: place, // Mantener compatibilidad
+          showRoute: true, // Indicar que debe mostrar la ruta
+          routeInfo: routeResult.success ? {
+            coordinates: routeResult.coordinates,
+            distance: routeResult.distance,
+            duration: routeResult.duration,
+            steps: routeResult.steps,
+            profile: routeResult.profile,
+            bounds: routeResult.bounds
+          } : null,
+          routeError: !routeResult.success ? routeResult.error : null
+        };
+        
+        console.log('🗺️ Navegando al mapa con ruta calculada:', {
+          hasRouteInfo: !!routeData.routeInfo,
+          hasError: !!routeData.routeError
+        });
+        
+        navigation.navigate('AdminMap', routeData);
+
+      } catch (error) {
+        console.error('❌ Error calculando ruta:', error);
+        Alert.alert('Error', 'No se pudo calcular la ruta. Se mostrará una línea recta.');
+        
+        // Fallback con línea recta
+        const routeData = {
+          origin: {
+            latitude: currentLocation.location.latitude,
+            longitude: currentLocation.location.longitude,
+            name: 'Tu ubicación',
+            address: currentLocation.address?.formatted || 'Ubicación actual'
+          },
+          destination: {
+            latitude: place.coordinates.latitude,
+            longitude: place.coordinates.longitude,
+            name: place.name,
+            address: place.label || place.address?.locality || 'Destino'
+          },
+          selectedLocation: place,
+          showRoute: true,
+          routeInfo: null,
+          routeError: error.message
+        };
+        
+        navigation.navigate('AdminMap', routeData);
+      } finally {
+        setLoading(false);
+      }
     }
   };
 

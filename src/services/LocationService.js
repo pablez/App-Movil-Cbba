@@ -434,6 +434,217 @@ class LocationService {
       };
     }
   }
+
+  /**
+   * Calcula ruta óptima entre dos puntos usando OpenRouteService Directions API
+   * @param {Object} start - Punto de origen {latitude, longitude}
+   * @param {Object} end - Punto de destino {latitude, longitude} 
+   * @param {String} profile - Perfil de ruta: 'driving-car', 'foot-walking', 'cycling-regular'
+   * @returns {Object} Resultado con coordenadas de la ruta, distancia y tiempo
+   */
+  static async getOptimalRoute(start, end, profile = 'driving-car') {
+    try {
+      console.log('🛣️ Calculando ruta óptima:', profile);
+      console.log('📍 Origen:', start);
+      console.log('🎯 Destino:', end);
+
+      // Validar coordenadas
+      if (!start?.latitude || !start?.longitude || !end?.latitude || !end?.longitude) {
+        throw new Error('Coordenadas inválidas para calcular la ruta');
+      }
+
+      // Construir URL de la API de Directions (formato JSON estándar, no GeoJSON)
+      const url = `${BASE_URL}/v2/directions/${profile}`;
+      
+      // Coordenadas en formato [lng, lat] para OpenRouteService
+      const requestCoordinates = [
+        [start.longitude, start.latitude],
+        [end.longitude, end.latitude]
+      ];
+
+      const requestBody = {
+        coordinates: requestCoordinates,
+        format: 'json', // JSON estándar, no geojson
+        instructions: true,
+        language: 'es',
+        units: 'km',
+        geometry: true, // Incluir geometría de la ruta
+        elevation: false // No necesitamos elevación para simplificar
+      };
+
+      console.log('📡 Enviando solicitud de ruta a OpenRouteService...');
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': API_KEY,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error en la API de rutas (${response.status}): ${errorText}`);
+      }
+
+      const routeData = await response.json();
+
+      if (!routeData.routes || routeData.routes.length === 0) {
+        throw new Error('No se pudo calcular una ruta válida');
+      }
+
+      const route = routeData.routes[0];
+      const summary = route.summary;
+      const segment = route.segments[0];
+
+      // Decodificar la geometría si está en formato encoded polyline
+      let routeCoordinates;
+      if (typeof route.geometry === 'string') {
+        // La geometría está codificada, necesitamos decodificarla
+        console.log('🔄 Decodificando polyline geometry...');
+        routeCoordinates = this.decodePolyline(route.geometry);
+      } else if (Array.isArray(route.geometry)) {
+        // Ya está en formato de coordenadas
+        routeCoordinates = route.geometry;
+      } else {
+        console.warn('⚠️ Formato de geometría no reconocido, usando línea recta');
+        routeCoordinates = [[start.longitude, start.latitude], [end.longitude, end.latitude]];
+      }
+
+      // Extraer información de la ruta
+      const routeInfo = {
+        success: true,
+        coordinates: routeCoordinates, // Array de [lng, lat] puntos
+        distance: summary.distance * 1000, // Convertir de km a metros
+        duration: summary.duration, // Ya está en segundos
+        steps: segment.steps, // Pasos detallados
+        summary: summary,
+        profile: profile,
+        bounds: routeData.bbox ? {
+          minLng: routeData.bbox[0],
+          minLat: routeData.bbox[1],
+          maxLng: routeData.bbox[2],
+          maxLat: routeData.bbox[3]
+        } : this.calculateBounds(routeCoordinates)
+      };
+
+      console.log('✅ Ruta calculada exitosamente:');
+      console.log(`📏 Distancia: ${(routeInfo.distance / 1000).toFixed(2)} km`);
+      console.log(`⏱️ Tiempo estimado: ${Math.round(routeInfo.duration / 60)} min`);
+      console.log(`🗺️ Puntos de ruta: ${routeInfo.coordinates.length}`);
+
+      return routeInfo;
+
+    } catch (error) {
+      console.error('❌ Error calculando ruta óptima:', error);
+      return {
+        success: false,
+        error: error.message,
+        fallback: true,
+        // Fallback: línea recta entre puntos
+        coordinates: [[start.longitude, start.latitude], [end.longitude, end.latitude]],
+        distance: this.calculateStraightDistance(start, end) * 1000, // Convertir a metros
+        duration: null,
+        steps: [],
+        profile: profile
+      };
+    }
+  }
+
+  /**
+   * Decodifica un encoded polyline (algoritmo de Google)
+   * @param {String} encoded - String codificado
+   * @returns {Array} Array de coordenadas [lng, lat]
+   */
+  static decodePolyline(encoded) {
+    if (!encoded) return [];
+    
+    const coords = [];
+    let index = 0;
+    let lat = 0;
+    let lng = 0;
+
+    try {
+      while (index < encoded.length) {
+        let b;
+        let shift = 0;
+        let result = 0;
+
+        do {
+          b = encoded.charCodeAt(index++) - 63;
+          result |= (b & 0x1f) << shift;
+          shift += 5;
+        } while (b >= 0x20);
+
+        const deltaLat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+        lat += deltaLat;
+
+        shift = 0;
+        result = 0;
+
+        do {
+          b = encoded.charCodeAt(index++) - 63;
+          result |= (b & 0x1f) << shift;
+          shift += 5;
+        } while (b >= 0x20);
+
+        const deltaLng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+        lng += deltaLng;
+
+        coords.push([lng / 1e5, lat / 1e5]); // [lng, lat] dividido por 100000
+      }
+    } catch (error) {
+      console.error('❌ Error decodificando polyline:', error);
+      return [];
+    }
+
+    console.log(`🔄 Polyline decodificado: ${coords.length} puntos`);
+    return coords;
+  }
+
+  /**
+   * Calcula los límites de una ruta (bounding box)
+   * @param {Array} coordinates - Array de coordenadas [lng, lat]
+   * @returns {Object} Límites {minLng, minLat, maxLng, maxLat}
+   */
+  static calculateBounds(coordinates) {
+    if (!coordinates || coordinates.length === 0) {
+      return null;
+    }
+
+    let minLng = coordinates[0][0];
+    let maxLng = coordinates[0][0];
+    let minLat = coordinates[0][1];
+    let maxLat = coordinates[0][1];
+
+    coordinates.forEach(([lng, lat]) => {
+      minLng = Math.min(minLng, lng);
+      maxLng = Math.max(maxLng, lng);
+      minLat = Math.min(minLat, lat);
+      maxLat = Math.max(maxLat, lat);
+    });
+
+    return { minLng, minLat, maxLng, maxLat };
+  }
+
+  /**
+   * Calcula distancia en línea recta entre dos puntos (Haversine)
+   * @param {Object} point1 - {latitude, longitude}
+   * @param {Object} point2 - {latitude, longitude}  
+   * @returns {Number} Distancia en kilómetros
+   */
+  static calculateStraightDistance(point1, point2) {
+    const R = 6371; // Radio de la Tierra en km
+    const dLat = (point2.latitude - point1.latitude) * Math.PI / 180;
+    const dLng = (point2.longitude - point1.longitude) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+             Math.cos(point1.latitude * Math.PI / 180) * Math.cos(point2.latitude * Math.PI / 180) *
+             Math.sin(dLng/2) * Math.sin(dLng/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  }
 }
 
 export default LocationService;

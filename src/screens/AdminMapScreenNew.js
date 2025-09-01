@@ -10,6 +10,7 @@ import {
 import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
 import LocationService from '../services/LocationService';
+import { LocationService as FirestoreLocationService } from '../services/firestoreService';
 
 const AdminMapScreen = ({ navigation, route }) => {
   const [location, setLocation] = useState(null);
@@ -17,11 +18,23 @@ const AdminMapScreen = ({ navigation, route }) => {
   const [errorMsg, setErrorMsg] = useState(null);
   const [mapReady, setMapReady] = useState(false);
   const webViewRef = useRef(null);
+  const [drivers, setDrivers] = useState([]);
 
   // Obtener ubicación actual al cargar el componente
   useEffect(() => {
     getCurrentLocation();
   }, []);
+
+  // Suscribirse a conductores en Firestore y reenviarlos al WebView
+  useEffect(() => {
+    const unsub = FirestoreLocationService.getNearbyDrivers((driversData) => {
+      setDrivers(driversData || []);
+      // Si mapa listo, enviar inmediatamente
+      postDriversToWebView(driversData || []);
+    });
+
+    return () => { if (unsub) unsub(); };
+  }, [mapReady]);
 
   const getCurrentLocation = async () => {
     try {
@@ -74,32 +87,16 @@ const AdminMapScreen = ({ navigation, route }) => {
   // Actualizar ubicación en el mapa
   const updateMapLocation = (latitude, longitude) => {
     if (webViewRef.current) {
-      const script = `
-        if (window.map && window.vectorSource) {
-          window.vectorSource.clear();
-          
-          const coords = ol.proj.fromLonLat([${longitude}, ${latitude}]);
-          window.map.getView().setCenter(coords);
-          window.map.getView().setZoom(16);
-          
-          const marker = new ol.Feature({
-            geometry: new ol.geom.Point(coords)
-          });
-          
-          marker.setStyle(new ol.style.Style({
-            image: new ol.style.Circle({
-              radius: 8,
-              fill: new ol.style.Fill({ color: '#4CAF50' }),
-              stroke: new ol.style.Stroke({ color: '#fff', width: 3 })
-            })
-          }));
-          
-          window.vectorSource.addFeature(marker);
-          console.log('📍 Marcador actualizado:', ${latitude}, ${longitude});
-        }
-      `;
-      
-      webViewRef.current.postMessage(script);
+      const message = JSON.stringify({ type: 'center', latitude, longitude });
+      webViewRef.current.postMessage(message);
+    }
+  };
+
+  // Enviar lista de conductores al WebView
+  const postDriversToWebView = (driversList = []) => {
+    if (webViewRef.current && mapReady) {
+      const payload = JSON.stringify({ type: 'driversUpdate', drivers: driversList });
+      webViewRef.current.postMessage(payload);
     }
   };
 
@@ -147,26 +144,69 @@ const AdminMapScreen = ({ navigation, route }) => {
                     }),
                     new ol.layer.Vector({ source: window.vectorSource })
                 ],
-                view: new ol.View({
-                    center: ol.proj.fromLonLat([-66.1568, -17.3895]), // Cochabamba
-                    zoom: 13
-                })
-            });
+        view: new ol.View({
+          center: ol.proj.fromLonLat([-66.1568, -17.3895]), // Cochabamba
+          zoom: 13
+        })
+      });
 
-            window.map.on('loadend', function() {
-                document.getElementById('loading').style.display = 'none';
-                if (window.ReactNativeWebView) {
-                    window.ReactNativeWebView.postMessage('mapReady');
-                }
-            });
+      // Ocultar cargando cuando el mapa esté listo
+      // Algunas versiones de OL no disparan 'loadend' en el mapa directamente,
+      // así que esperamos un breve timeout y luego notificamos a la app.
+      setTimeout(function() {
+        document.getElementById('loading').style.display = 'none';
+        if (window.ReactNativeWebView) {
+          window.ReactNativeWebView.postMessage('mapReady');
+        }
+      }, 800);
 
-            window.addEventListener('message', function(event) {
-                try { eval(event.data); } catch (e) { console.error(e); }
-            });
-            
-            document.addEventListener('message', function(event) {
-                try { eval(event.data); } catch (e) { console.error(e); }
-            });
+      // Manejar mensajes desde React Native (esperamos JSON con {type, ...})
+      function updateDrivers(drivers) {
+        try {
+          window.vectorSource.clear();
+          drivers.forEach(function(d) {
+            if (!d || !d.latitude || !d.longitude) return;
+            const coords = ol.proj.fromLonLat([d.longitude, d.latitude]);
+            const feature = new ol.Feature({ geometry: new ol.geom.Point(coords) });
+            feature.setStyle(new ol.style.Style({
+              image: new ol.style.Circle({
+                radius: 8,
+                fill: new ol.style.Fill({ color: '#2196F3' }),
+                stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+              })
+            }));
+            window.vectorSource.addFeature(feature);
+          });
+        } catch (e) { console.error(e); }
+      }
+
+      function centerOnCoords(lat, lon) {
+        try {
+          if (window.map) {
+            const coords = ol.proj.fromLonLat([lon, lat]);
+            window.map.getView().setCenter(coords);
+            window.map.getView().setZoom(15);
+          }
+        } catch (e) { console.error(e); }
+      }
+
+      function handleIncoming(event) {
+        var data = event && event.data ? event.data : null;
+        if (!data) return;
+        try {
+          var msg = JSON.parse(data);
+          if (msg.type === 'driversUpdate') {
+            updateDrivers(msg.drivers || []);
+          } else if (msg.type === 'center') {
+            centerOnCoords(msg.latitude, msg.longitude);
+          }
+        } catch (err) {
+          // No es JSON -> ignorar
+        }
+      }
+
+      window.addEventListener('message', handleIncoming);
+      document.addEventListener('message', handleIncoming);
         </script>
     </body>
     </html>`;
@@ -246,7 +286,7 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: '#2196F3',
-    paddingTop: 50,
+    paddingTop: 5,
     paddingBottom: 20,
     paddingHorizontal: 20,
     shadowColor: '#000',

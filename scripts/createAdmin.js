@@ -35,16 +35,19 @@ const createAdminUser = async () => {
     
     // Crear documento del usuario administrador en Firestore
     const adminData = {
-      firstName: 'Admin',
-      lastName: 'TransportApp',
       email: adminEmail,
+      fullName: 'Administrador Sistema',
+      firstName: 'Administrador',
+      lastName: 'Sistema',
       phone: '+59112345678',
-      role: 'admin',
+      role: 'ADMIN',
       status: 'approved',
+      isApproved: true,
       isActive: true,
-      createdAt: new Date().toISOString(),
-      approvedAt: new Date().toISOString(),
-      isAdmin: true
+      isAdmin: true,
+      createdAt: '2025-08-27T17:39:16.000Z', // Fecha exacta que proporcionaste
+      updatedAt: '2025-08-27T17:39:16.000Z',
+      approvedAt: '2025-08-27T17:39:16.000Z'
     };
     
     await setDoc(doc(db, 'users', userId), adminData);

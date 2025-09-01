@@ -4,6 +4,8 @@ import { StyleSheet, View } from 'react-native';
 import { AuthProvider } from './src/context/AuthContext';
 import AppNavigator from './src/navigation/AppNavigator';
 
+// Suprimir advertencias conocidas
+import './src/utils/WarningSuppress';
 
 export default function App() {
   return (

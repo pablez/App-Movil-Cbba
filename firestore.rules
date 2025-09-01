@@ -2,47 +2,58 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Reglas para usuarios - solo pueden ver/editar sus propios datos
+
+    // Usuarios: lectura si eres el mismo usuario o si eres admin; crear/editar solo por el propio usuario
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Lectura: el dueño puede leer su doc; además permitimos que un usuario con role=='admin'
+      // (almacenado en su propio documento users/{uid}) lea otros usuarios. Para evitar errores
+      // cuando el documento admin no exista, comprobamos exists(...) antes de acceder a .data.
+      allow read: if request.auth != null && (
+        request.auth.uid == userId ||
+        (
+          // comprobar existencia y luego comparar el campo role a 'admin'
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          // aceptar tanto 'admin' como 'ADMIN' para evitar problemas por mayúsculas
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'ADMIN']
+        )
+      );
+
+      // Crear solo por el propio usuario autenticado.
+      // Permitir update/delete al propio usuario OR a un admin (role == 'admin'|'ADMIN').
+      // Esto permite que administradores aprueben/rechacen cuentas desde la app.
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update, delete: if request.auth != null && (
+        request.auth.uid == userId || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'ADMIN']
+        )
+      );
     }
-    
-    // Administradores pueden leer todos los usuarios
-    match /users/{document=**} {
-      allow read: if request.auth != null && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
-    }
-    
-    // Reglas para viajes - pasajeros y conductores pueden ver sus viajes
+
+    // Viajes: cualquiera autenticado puede crear; solo pasajero/chofer pueden leer/editar su viaje
     match /trips/{tripId} {
-      allow read, write: if request.auth != null && 
-        (resource.data.passengerId == request.auth.uid || 
-         resource.data.driverId == request.auth.uid);
-      allow create: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.passengerId is string;
+      allow read, update, delete: if request.auth != null &&
+        ((resource.data.passengerId == request.auth.uid) || (resource.data.driverId == request.auth.uid));
     }
-    
-    // Ubicaciones de conductores - todos pueden leer, solo el conductor puede escribir
+
+    // Ubicaciones de conductores
     match /driverLocations/{driverId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == driverId;
     }
-    
-    // Pagos - solo el usuario propietario puede ver sus pagos
+
+    // Pagos: solo propietario puede crear/leer/editar sus pagos
     match /payments/{paymentId} {
-      allow read, write: if request.auth != null && 
-        resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
     }
-    
-    // Vehículos - todos pueden leer, solo el conductor propietario puede gestionar
+
+    // Vehículos: lectura autenticada; escritura solo si el request.resource.data.driverId coincide
     match /vehicles/{vehicleId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && 
-        resource.data.driverId == request.auth.uid;
+      allow create, update, delete: if request.auth != null && request.resource.data.driverId == request.auth.uid;
     }
-    
-    // Regla de fallback para desarrollo (remover en producción)
-    match /{document=**} {
-      allow read, write: if request.auth != null;
-    }
+
   }
 }

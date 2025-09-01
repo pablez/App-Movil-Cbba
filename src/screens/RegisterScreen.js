@@ -1,4 +1,5 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import {
   View,
   Text,
@@ -8,11 +9,9 @@ import {
   Alert,
   ActivityIndicator,
   SafeAreaView,
-  ScrollView,
   Image,
   Modal,
   Dimensions,
-  KeyboardAvoidingView,
   Platform
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
@@ -24,15 +23,60 @@ import { isValidEmail, isValidPhone } from '../utils/helpers';
 
 const { width } = Dimensions.get('window');
 
+// Componente CustomInput definido a nivel superior: forwardRef, reenvía props y añade logs ligeros para diagnóstico
+const CustomInput = React.forwardRef(function CustomInput({
+  placeholder,
+  value,
+  onChangeText,
+  keyboardType = 'default',
+  secureTextEntry = false,
+  autoCapitalize = 'sentences',
+  returnKeyType = 'default',
+  onSubmitEditing,
+  onFocus,
+  onBlur
+}, ref) {
+  // Log ligero para detectar renders/remounts durante diagnóstico
+  console.log('CustomInput render:', placeholder);
+
+  // Detectar mount / unmount para ver si el componente se remonta al teclear
+  React.useEffect(() => {
+    console.log('CustomInput mounted:', placeholder);
+    return () => {
+      console.log('CustomInput unmounted:', placeholder);
+    };
+  }, [placeholder]);
+
+  return (
+    <TextInput
+      ref={ref}
+      style={styles.input}
+      placeholder={placeholder}
+      onChangeText={onChangeText}
+      value={value}
+      keyboardType={keyboardType}
+      secureTextEntry={secureTextEntry}
+      autoCapitalize={autoCapitalize}
+      blurOnSubmit={false}
+      returnKeyType={returnKeyType}
+      onSubmitEditing={onSubmitEditing}
+      onFocus={() => { console.log(placeholder, 'onFocus'); if (onFocus) onFocus(); }}
+      onBlur={() => { console.log(placeholder, 'onBlur'); if (onBlur) onBlur(); }}
+    />
+  );
+});
+
 const RegisterScreen = ({ navigation }) => {
+  console.log('RegisterScreen render');
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedRole, setSelectedRole] = useState('');
   const [showImageModal, setShowImageModal] = useState(false);
   const [currentImageType, setCurrentImageType] = useState('');
   const [loading, setLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({});
   
-  // Usar useRef para los valores del formulario para evitar re-renders
-  const formData = useRef({
+  // Usar useState para los valores del formulario para que los campos sean controlados
+  const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
     email: '',
@@ -40,6 +84,7 @@ const RegisterScreen = ({ navigation }) => {
     password: '',
     confirmPassword: '',
     passengerType: PASSENGER_TYPES.REGULAR.id,
+  universityCardExpiry: '',
     vehiclePlate: '',
     vehicleModel: '',
     vehicleYear: '',
@@ -51,6 +96,8 @@ const RegisterScreen = ({ navigation }) => {
     idCardFront: null,
     idCardBack: null,
     studentCard: null,
+  universityCardFront: null,
+  universityCardBack: null,
     vehicleFront: null,
     vehicleBack: null,
     vehicleInterior: null,
@@ -60,6 +107,18 @@ const RegisterScreen = ({ navigation }) => {
   });
   
   const { register } = useAuth();
+
+  // refs para manejar foco entre inputs
+  const firstNameRef = React.useRef(null);
+  const lastNameRef = React.useRef(null);
+  const emailRef = React.useRef(null);
+  const phoneRef = React.useRef(null);
+  const passwordRef = React.useRef(null);
+  const confirmPasswordRef = React.useRef(null);
+  const vehiclePlateRef = React.useRef(null);
+  const vehicleModelRef = React.useRef(null);
+  const vehicleYearRef = React.useRef(null);
+  const vehicleCapacityRef = React.useRef(null);
 
   // Función para verificar y solicitar permisos específicos
   const requestSpecificPermissions = useCallback(async (forCamera = false) => {
@@ -112,7 +171,7 @@ const RegisterScreen = ({ navigation }) => {
   }, []);
 
   const updateFormData = useCallback((field, value) => {
-    formData.current[field] = value;
+    setFormData(prev => ({ ...prev, [field]: value }));
   }, []);
 
   const openImageModal = useCallback(async (imageType) => {
@@ -187,7 +246,7 @@ const RegisterScreen = ({ navigation }) => {
   }, [currentImageType, requestSpecificPermissions]);
 
   const validateForm = useCallback(() => {
-    const data = formData.current;
+    const data = formData;
     
     if (!data.firstName.trim()) {
       Alert.alert('Error', 'El nombre es requerido');
@@ -239,23 +298,51 @@ const RegisterScreen = ({ navigation }) => {
       }
     }
 
+    // Validaciones para pasajero universitario
+    if (selectedRole === USER_ROLES.PASSENGER && data.passengerType === PASSENGER_TYPES.UNIVERSITY.id) {
+      if (!images.idCardFront) {
+        Alert.alert('Error', 'Se requiere cédula (frente)');
+        return false;
+      }
+      if (!images.idCardBack) {
+        Alert.alert('Error', 'Se requiere cédula (reverso)');
+        return false;
+      }
+      if (!images.universityCardFront) {
+        Alert.alert('Error', 'Se requiere carnet universitario (frente)');
+        return false;
+      }
+      if (!images.universityCardBack) {
+        Alert.alert('Error', 'Se requiere carnet universitario (reverso)');
+        return false;
+      }
+      if (!data.universityCardExpiry || !data.universityCardExpiry.trim()) {
+        Alert.alert('Error', 'Se requiere la fecha de vencimiento del carnet universitario');
+        return false;
+      }
+    }
+
     return true;
-  }, [selectedRole]);
+  }, [selectedRole, formData, images]);
 
   const handleRegister = useCallback(async () => {
     if (!validateForm()) return;
 
     setLoading(true);
+  setUploadProgress({});
     try {
-      const data = formData.current;
+      const data = formData;
       const userData = {
         firstName: data.firstName,
         lastName: data.lastName,
         phone: data.phone,
         role: selectedRole,
         ...(selectedRole === USER_ROLES.PASSENGER && {
-          passengerType: data.passengerType
+            passengerType: data.passengerType
         }),
+          ...(selectedRole === USER_ROLES.PASSENGER && data.passengerType === PASSENGER_TYPES.UNIVERSITY.id && {
+            universityCardExpiry: data.universityCardExpiry
+          }),
         ...(selectedRole === USER_ROLES.DRIVER && {
           vehicleInfo: {
             plate: data.vehiclePlate,
@@ -264,17 +351,35 @@ const RegisterScreen = ({ navigation }) => {
             capacity: data.vehicleCapacity
           }
         }),
-        ...images // Incluir todas las imágenes
+  images: { ...images } // Incluir todas las imágenes bajo la clave `images` para que AuthContext las procese
       };
 
-      await register(data.email, data.password, userData);
-      Alert.alert('Éxito', 'Cuenta creada exitosamente. Tu cuenta será revisada antes de la aprobación.');
+      // Pasar callback para recibir progreso de subida por imagen
+      const res = await register(data.email, data.password, userData, ({ key, status, url, error }) => {
+        setUploadProgress(prev => ({ ...prev, [key]: { status, url, error } }));
+      });
+
+      if (!res || res.success === false) {
+        // Mostrar errores conocidos de forma amigable
+        if (res && res.code === 'auth/email-already-in-use') {
+          Alert.alert('Error', 'El correo ingresado ya está registrado. Por favor inicia sesión o recupera tu contraseña.');
+        } else {
+          const msg = (res && res.error) ? res.error : 'No se pudo crear la cuenta';
+          Alert.alert('Error', msg);
+        }
+      } else {
+        // Registro creado correctamente; la cuenta queda en estado 'pending' y el admin debe aprobarla.
+        Alert.alert('Registro enviado', 'Tu cuenta fue creada y quedará en estado pendiente hasta que un administrador la apruebe.', [
+          { text: 'Aceptar', onPress: () => navigation.navigate('Login') }
+        ]);
+      }
     } catch (error) {
-      Alert.alert('Error', error.message);
+      console.error('handleRegister exception', error);
+      Alert.alert('Error', error?.message || String(error));
     } finally {
       setLoading(false);
     }
-  }, [validateForm, selectedRole, images, register]);
+  }, [validateForm, selectedRole, images, register, formData]);
 
   const ImageButton = React.memo(({ imageType, label, required = false }) => {
     const imageUri = images[imageType];
@@ -305,35 +410,19 @@ const RegisterScreen = ({ navigation }) => {
     );
   });
 
-  const CustomInput = React.memo(({ 
-    placeholder, 
-    field,
-    keyboardType = 'default',
-    secureTextEntry = false,
-    autoCapitalize = 'sentences'
-  }) => {
-    const handleChangeText = useCallback((text) => {
-      updateFormData(field, text);
-    }, [field]);
-
-    return (
-      <TextInput
-        style={styles.input}
-        placeholder={placeholder}
-        onChangeText={handleChangeText}
-        keyboardType={keyboardType}
-        secureTextEntry={secureTextEntry}
-        autoCapitalize={autoCapitalize}
-        blurOnSubmit={false}
-      />
-    );
-  });
-
   const RoleSelectionScreen = () => (
     <View style={styles.roleSelectionContainer}>
+      <View style={styles.roleHeader}>
+        <TouchableOpacity
+          style={styles.loginButton}
+          onPress={() => navigation.navigate('Login')}
+        >
+          <Ionicons name="log-in-outline" size={22} color="#2E86AB" />
+          <Text style={styles.loginButtonText}>Iniciar sesión</Text>
+        </TouchableOpacity>
+      </View>
       <Text style={styles.roleTitle}>Selecciona tu rol</Text>
       <Text style={styles.roleSubtitle}>¿Cómo quieres usar TransportApp?</Text>
-      
       <TouchableOpacity 
         style={styles.roleCard}
         onPress={() => handleRoleSelection(USER_ROLES.PASSENGER)}
@@ -344,7 +433,6 @@ const RegisterScreen = ({ navigation }) => {
           Encuentra y paga por viajes en transporte público
         </Text>
       </TouchableOpacity>
-
       <TouchableOpacity 
         style={styles.roleCard}
         onPress={() => handleRoleSelection(USER_ROLES.DRIVER)}
@@ -359,193 +447,257 @@ const RegisterScreen = ({ navigation }) => {
   );
 
   const RegistrationForm = () => (
-    <KeyboardAvoidingView 
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    <KeyboardAwareScrollView
+      contentContainerStyle={[styles.scrollContent, { marginBottom: 10, paddingTop: 50 }]}
+      keyboardShouldPersistTaps="always"
+      showsVerticalScrollIndicator={false}
+      bounces={false}
+      enableOnAndroid={true}
+      extraScrollHeight={20}
+      enableResetScrollToCoords={false}
     >
-      <ScrollView 
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="always"
-        showsVerticalScrollIndicator={false}
-        bounces={false}
-      >
-        <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => setCurrentStep(0)}
-          >
-            <Ionicons name="arrow-back" size={24} color="#2E86AB" />
-          </TouchableOpacity>
-          <Text style={styles.title}>
-            Registro como {selectedRole === USER_ROLES.PASSENGER ? 'Pasajero' : 'Conductor'}
-          </Text>
-        </View>
-
-      <View style={styles.form}>
-        {/* Foto de perfil */}
-        <Text style={styles.sectionTitle}>Información Personal</Text>
-        <ImageButton 
-          imageType="profileImage" 
-          label="Foto de Perfil" 
-          required 
-        />
-
-        <CustomInput
-          placeholder="Nombre"
-          field="firstName"
-        />
-
-        <CustomInput
-          placeholder="Apellido"
-          field="lastName"
-        />
-
-        <CustomInput
-          placeholder="Correo electrónico"
-          field="email"
-          keyboardType="email-address"
-          autoCapitalize="none"
-        />
-
-        <CustomInput
-          placeholder="Teléfono"
-          field="phone"
-          keyboardType="phone-pad"
-        />
-
-        <CustomInput
-          placeholder="Contraseña"
-          field="password"
-          secureTextEntry
-        />
-
-        <CustomInput
-          placeholder="Confirmar contraseña"
-          field="confirmPassword"
-          secureTextEntry
-        />
-
-        {/* Campos específicos para pasajeros */}
-        {selectedRole === USER_ROLES.PASSENGER && (
-          <View style={styles.passengerSection}>
-            <Text style={styles.sectionTitle}>Tipo de Pasajero</Text>
-            <View style={styles.pickerContainer}>
-              <Picker
-                selectedValue={formData.current.passengerType}
-                onValueChange={(value) => updateFormData('passengerType', value)}
-                style={styles.picker}
-              >
-                <Picker.Item label="Regular" value={PASSENGER_TYPES.REGULAR.id} />
-                <Picker.Item label="Estudiante" value={PASSENGER_TYPES.STUDENT.id} />
-                <Picker.Item label="Universitario" value={PASSENGER_TYPES.UNIVERSITY.id} />
-                <Picker.Item label="Adulto Mayor" value={PASSENGER_TYPES.SENIOR.id} />
-                <Picker.Item label="Persona con Discapacidad" value={PASSENGER_TYPES.DISABLED.id} />
-              </Picker>
-            </View>
-
-            <Text style={styles.sectionTitle}>Documentos</Text>
-            
-            <ImageButton 
-              imageType="idCardFront" 
-              label="Cédula de Identidad (Frente)" 
-            />
-            <ImageButton 
-              imageType="idCardBack" 
-              label="Cédula de Identidad (Reverso)" 
-            />
-            
-            {(formData.current.passengerType === PASSENGER_TYPES.STUDENT.id || formData.current.passengerType === PASSENGER_TYPES.UNIVERSITY.id) && (
-              <ImageButton 
-                imageType="studentCard" 
-                label="Carnet Estudiantil" 
-              />
-            )}
-          </View>
-        )}
-
-        {/* Campos específicos para conductores */}
-        {selectedRole === USER_ROLES.DRIVER && (
-          <View style={styles.driverSection}>
-            <Text style={styles.sectionTitle}>Información del Vehículo</Text>
-            <CustomInput
-              placeholder="Placa del vehículo"
-              field="vehiclePlate"
-              autoCapitalize="characters"
-            />
-            <CustomInput
-              placeholder="Modelo del vehículo"
-              field="vehicleModel"
-            />
-            <CustomInput
-              placeholder="Año del vehículo"
-              field="vehicleYear"
-              keyboardType="numeric"
-            />
-            <CustomInput
-              placeholder="Capacidad de pasajeros"
-              field="vehicleCapacity"
-              keyboardType="numeric"
-            />
-
-            <Text style={styles.sectionTitle}>Fotos del Vehículo</Text>
-            <ImageButton 
-              imageType="vehicleFront" 
-              label="Foto Frontal del Vehículo" 
-            />
-            <ImageButton 
-              imageType="vehicleBack" 
-              label="Foto Trasera del Vehículo" 
-            />
-            <ImageButton 
-              imageType="vehicleInterior" 
-              label="Foto Interior del Vehículo" 
-            />
-
-            <Text style={styles.sectionTitle}>Documentos del Conductor</Text>
-            <ImageButton 
-              imageType="driverLicense" 
-              label="Licencia de Conducir" 
-            />
-            <ImageButton 
-              imageType="proofOfOwnership" 
-              label="Prueba de Propiedad del Vehículo" 
-            />
-            <ImageButton 
-              imageType="criminalBackground" 
-              label="Antecedentes Penales" 
-            />
-          </View>
-        )}
-
+      <View style={[styles.header, { marginBottom: 10 }]}> 
         <TouchableOpacity 
-          style={styles.registerButton} 
-          onPress={handleRegister}
-          disabled={loading}
+          style={styles.backButton}
+          onPress={() => setCurrentStep(0)}
         >
-          {loading ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={styles.registerButtonText}>Completar Registro</Text>
-          )}
+          <Ionicons name="arrow-back" size={24} color="#2E86AB" />
         </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.loginLink}
-          onPress={() => navigation.navigate('Login')}
-        >
-          <Text style={styles.loginLinkText}>
-            ¿Ya tienes cuenta? Inicia sesión
-          </Text>
-        </TouchableOpacity>
+        <Text style={styles.title}>
+          Registro como {selectedRole === USER_ROLES.PASSENGER ? 'Pasajero' : 'Conductor'}
+        </Text>
       </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+
+    <View style={[styles.form, { marginTop: 10 }]}> 
+      {/* Foto de perfil */}
+      <Text style={styles.sectionTitle}>Información Personal</Text>
+      <ImageButton 
+        imageType="profileImage" 
+        label="Foto de Perfil" 
+        required 
+      />
+
+      <CustomInput
+        key="firstName"
+        ref={firstNameRef}
+        placeholder="Nombre"
+        value={formData.firstName}
+        onChangeText={text => updateFormData('firstName', text)}
+        returnKeyType="next"
+        onSubmitEditing={() => lastNameRef.current && lastNameRef.current.focus()}
+      />
+
+      <CustomInput
+        key="lastName"
+        ref={lastNameRef}
+        placeholder="Apellido"
+        value={formData.lastName}
+        onChangeText={text => updateFormData('lastName', text)}
+        returnKeyType="next"
+        onSubmitEditing={() => emailRef.current && emailRef.current.focus()}
+      />
+
+      <CustomInput
+        key="email"
+        ref={emailRef}
+        placeholder="Correo electrónico"
+        value={formData.email}
+        onChangeText={text => updateFormData('email', text)}
+        keyboardType="email-address"
+        autoCapitalize="none"
+        returnKeyType="next"
+        onSubmitEditing={() => phoneRef.current && phoneRef.current.focus()}
+      />
+
+      <CustomInput
+        key="phone"
+        ref={phoneRef}
+        placeholder="Teléfono"
+        value={formData.phone}
+        onChangeText={text => updateFormData('phone', text)}
+        keyboardType="phone-pad"
+        returnKeyType="next"
+        onSubmitEditing={() => passwordRef.current && passwordRef.current.focus()}
+      />
+
+      <CustomInput
+        key="password"
+        ref={passwordRef}
+        placeholder="Contraseña"
+        value={formData.password}
+        onChangeText={text => updateFormData('password', text)}
+        secureTextEntry
+        returnKeyType="next"
+        onSubmitEditing={() => confirmPasswordRef.current && confirmPasswordRef.current.focus()}
+      />
+
+      <CustomInput
+        key="confirmPassword"
+        ref={confirmPasswordRef}
+        placeholder="Confirmar contraseña"
+        value={formData.confirmPassword}
+        onChangeText={text => updateFormData('confirmPassword', text)}
+        secureTextEntry
+        returnKeyType="done"
+      />
+
+      {/* Campos específicos para pasajeros */}
+      {selectedRole === USER_ROLES.PASSENGER && (
+        <View style={[styles.passengerSection, { marginTop: 10 }]}> 
+          <Text style={styles.sectionTitle}>Tipo de Pasajero</Text>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={formData.passengerType}
+              onValueChange={(value) => updateFormData('passengerType', value)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Regular" value={PASSENGER_TYPES.REGULAR.id} />
+              <Picker.Item label="Estudiante" value={PASSENGER_TYPES.STUDENT.id} />
+              <Picker.Item label="Universitario" value={PASSENGER_TYPES.UNIVERSITY.id} />
+              <Picker.Item label="Adulto Mayor" value={PASSENGER_TYPES.SENIOR.id} />
+              <Picker.Item label="Persona con Discapacidad" value={PASSENGER_TYPES.DISABLED.id} />
+            </Picker>
+          </View>
+
+          <Text style={styles.sectionTitle}>Documentos</Text>
+          
+          <ImageButton 
+            imageType="idCardFront" 
+            label="Cédula de Identidad (Frente)" 
+          />
+          <ImageButton 
+            imageType="idCardBack" 
+            label="Cédula de Identidad (Reverso)" 
+          />
+          
+          {(formData.passengerType === PASSENGER_TYPES.STUDENT.id || formData.passengerType === PASSENGER_TYPES.UNIVERSITY.id) && (
+                <>
+                <ImageButton 
+                  imageType="studentCard" 
+                  label="Carnet Estudiantil (frente)" 
+                />
+                </>
+          )}
+              {formData.passengerType === PASSENGER_TYPES.UNIVERSITY.id && (
+                <>
+                  <Text style={styles.sectionTitle}>Carnet Universitario</Text>
+                  <ImageButton
+                    imageType="universityCardFront"
+                    label="Carnet Universitario (Frente)"
+                    required
+                  />
+                  <ImageButton
+                    imageType="universityCardBack"
+                    label="Carnet Universitario (Reverso)"
+                    required
+                  />
+                  <Text style={styles.sectionTitle}>Fecha de Vencimiento del Carnet</Text>
+                  <CustomInput
+                    key="universityCardExpiry"
+                    placeholder="Fecha de vencimiento (YYYY-MM-DD)"
+                    value={formData.universityCardExpiry}
+                    onChangeText={text => updateFormData('universityCardExpiry', text)}
+                    keyboardType="default"
+                    returnKeyType="done"
+                  />
+                </>
+              )}
+        </View>
+      )}
+
+      {/* Campos específicos para conductores */}
+      {selectedRole === USER_ROLES.DRIVER && (
+        <View style={styles.driverSection}>
+          <Text style={styles.sectionTitle}>Información del Vehículo</Text>
+          <CustomInput
+            key="vehiclePlate"
+            ref={vehiclePlateRef}
+            placeholder="Placa del vehículo"
+            value={formData.vehiclePlate}
+            onChangeText={text => updateFormData('vehiclePlate', text)}
+            autoCapitalize="characters"
+            returnKeyType="next"
+            onSubmitEditing={() => vehicleModelRef.current && vehicleModelRef.current.focus()}
+          />
+          <CustomInput
+            key="vehicleModel"
+            ref={vehicleModelRef}
+            placeholder="Modelo del vehículo"
+            value={formData.vehicleModel}
+            onChangeText={text => updateFormData('vehicleModel', text)}
+            returnKeyType="next"
+            onSubmitEditing={() => vehicleYearRef.current && vehicleYearRef.current.focus()}
+          />
+          <CustomInput
+            key="vehicleYear"
+            ref={vehicleYearRef}
+            placeholder="Año del vehículo"
+            value={formData.vehicleYear}
+            onChangeText={text => updateFormData('vehicleYear', text)}
+            keyboardType="numeric"
+            returnKeyType="next"
+            onSubmitEditing={() => vehicleCapacityRef.current && vehicleCapacityRef.current.focus()}
+          />
+          <CustomInput
+            key="vehicleCapacity"
+            ref={vehicleCapacityRef}
+            placeholder="Capacidad de pasajeros"
+            value={formData.vehicleCapacity}
+            onChangeText={text => updateFormData('vehicleCapacity', text)}
+            keyboardType="numeric"
+            returnKeyType="done"
+          />
+
+          <Text style={styles.sectionTitle}>Fotos del Vehículo</Text>
+          <ImageButton 
+            imageType="vehicleFront" 
+            label="Foto Frontal del Vehículo" 
+          />
+          <ImageButton 
+            imageType="vehicleBack" 
+            label="Foto Trasera del Vehículo" 
+          />
+          <ImageButton 
+            imageType="vehicleInterior" 
+            label="Foto Interior del Vehículo" 
+          />
+
+          <Text style={styles.sectionTitle}>Documentos del Conductor</Text>
+          <ImageButton 
+            imageType="driverLicense" 
+            label="Licencia de Conducir" 
+          />
+          {/* Eliminado: Prueba de Propiedad y Antecedentes Penales según solicitud */}
+        </View>
+      )}
+
+      <TouchableOpacity 
+        style={styles.registerButton} 
+        onPress={handleRegister}
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="#ffffff" />
+        ) : (
+          <Text style={styles.registerButtonText}>Completar Registro</Text>
+        )}
+      </TouchableOpacity>
+
+      <TouchableOpacity 
+        style={styles.loginLink}
+        onPress={() => navigation.navigate('Login')}
+      >
+        <Text style={styles.loginLinkText}>
+          ¿Ya tienes cuenta? Inicia sesión
+        </Text>
+      </TouchableOpacity>
+    </View>
+    </KeyboardAwareScrollView>
   );
 
   return (
     <SafeAreaView style={styles.container}>
-      {currentStep === 0 ? <RoleSelectionScreen /> : <RegistrationForm />}
+      {currentStep === 0 ? RoleSelectionScreen() : RegistrationForm()}
       
       {/* Modal para selección de imagen */}
       <Modal
@@ -589,63 +741,128 @@ const RegisterScreen = ({ navigation }) => {
           </View>
         </View>
       </Modal>
+
+      {/* Modal para progreso de subida */}
+      <Modal
+        visible={loading}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { width: width * 0.9 }]}>
+            <Text style={styles.modalTitle}>Subiendo imágenes...</Text>
+            <View style={{ maxHeight: 260 }}>
+              {Object.keys(uploadProgress).length === 0 && (
+                <Text style={styles.modalSubtitle}>Preparando subida...</Text>
+              )}
+              {Object.entries(uploadProgress).map(([key, info]) => (
+                <View key={key} style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 6 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontWeight: '600', color: '#174f6f' }}>{key}</Text>
+                    <Text style={{ color: '#666' }}>{info.status}{info.url ? ` — ${info.url.slice(0, 40)}...` : ''}{info.error ? ` — ${info.error}` : ''}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+            <TouchableOpacity style={[styles.modalButton, { marginTop: 12 }]} onPress={() => { /* no close while loading */ }}>
+              <ActivityIndicator color="#2E86AB" />
+              <View style={styles.modalButtonTextContainer}>
+                <Text style={styles.modalButtonText}>Subiendo</Text>
+                <Text style={styles.modalButtonSubtext}>Espera mientras se suben los archivos</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
+  flex: 1,
+  backgroundColor: '#eaf6fb',
   },
   roleSelectionContainer: {
     flex: 1,
     padding: 30,
     justifyContent: 'center',
   },
-  roleTitle: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#2E86AB',
-    textAlign: 'center',
+  roleHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     marginBottom: 10,
+    marginTop: Platform.OS === 'ios' ? 30 : 18,
+    minHeight: 48,
+    paddingTop: Platform.OS === 'ios' ? 0 : 0,
+  },
+  loginButton: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: '#dff4ff',
+  borderRadius: 12,
+  paddingVertical: 12,
+  paddingHorizontal: 22,
+  alignSelf: 'flex-start',
+  shadowColor: '#0b3954',
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.08,
+  shadowRadius: 6,
+  elevation: 4,
+  },
+  loginButtonText: {
+  color: '#1B6EA8',
+  fontWeight: '700',
+  fontSize: 18,
+  marginLeft: 10,
+  letterSpacing: 0.3,
+  },
+  roleTitle: {
+  fontSize: 32,
+  fontWeight: '800',
+  color: '#175f86',
+  textAlign: 'center',
+  marginBottom: 10,
   },
   roleSubtitle: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 40,
+  fontSize: 16,
+  color: '#4b6b86',
+  textAlign: 'center',
+  marginBottom: 40,
   },
   roleCard: {
-    backgroundColor: '#ffffff',
-    padding: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    marginBottom: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+  backgroundColor: '#ffffff',
+  padding: 28,
+  borderRadius: 16,
+  alignItems: 'center',
+  marginBottom: 20,
+  elevation: 4,
+  shadowColor: '#0b3954',
+  shadowOffset: { width: 0, height: 6 },
+  shadowOpacity: 0.06,
+  shadowRadius: 10,
+  borderWidth: 1,
+  borderColor: '#d8ecf7',
   },
   roleCardTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginTop: 15,
-    marginBottom: 10,
+  fontSize: 22,
+  fontWeight: '700',
+  color: '#174f6f',
+  marginTop: 12,
+  marginBottom: 8,
   },
   roleCardDescription: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    lineHeight: 20,
+  fontSize: 14,
+  color: '#4b6b86',
+  textAlign: 'center',
+  lineHeight: 20,
   },
   scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-    paddingBottom: 50,
+  flexGrow: 1,
+  paddingHorizontal: 20,
+  paddingVertical: 22,
+  paddingBottom: 60,
   },
   header: {
     flexDirection: 'row',
@@ -658,10 +875,10 @@ const styles = StyleSheet.create({
     padding: 5,
   },
   title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#2E86AB',
-    flex: 1,
+  fontSize: 22,
+  fontWeight: '800',
+  color: '#1B6EA8',
+  flex: 1,
   },
   subtitle: {
     fontSize: 16,
@@ -671,27 +888,27 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 15,
-    marginTop: 20,
+  fontSize: 17,
+  fontWeight: '700',
+  color: '#155f86',
+  marginBottom: 12,
+  marginTop: 18,
   },
   input: {
-    backgroundColor: '#ffffff',
-    padding: 15,
-    borderRadius: 10,
-    fontSize: 16,
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: '#ddd',
+  backgroundColor: '#ffffff',
+  padding: 14,
+  borderRadius: 12,
+  fontSize: 16,
+  marginBottom: 14,
+  borderWidth: 1,
+  borderColor: '#cfeffb',
   },
   pickerContainer: {
-    backgroundColor: '#ffffff',
-    borderRadius: 10,
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: '#ddd',
+  backgroundColor: '#ffffff',
+  borderRadius: 12,
+  marginBottom: 14,
+  borderWidth: 1,
+  borderColor: '#d7eef8',
   },
   pickerLabel: {
     fontSize: 16,
@@ -703,12 +920,12 @@ const styles = StyleSheet.create({
     height: 50,
   },
   imageButton: {
-    backgroundColor: '#ffffff',
-    borderRadius: 10,
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    overflow: 'hidden',
+  backgroundColor: '#ffffff',
+  borderRadius: 12,
+  marginBottom: 14,
+  borderWidth: 1,
+  borderColor: '#d0eafc',
+  overflow: 'hidden',
   },
   imageButtonContent: {
     flexDirection: 'row',
@@ -716,19 +933,19 @@ const styles = StyleSheet.create({
     padding: 15,
   },
   previewImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    marginRight: 15,
+  width: 64,
+  height: 64,
+  borderRadius: 10,
+  marginRight: 15,
   },
   placeholderImage: {
-    width: 60,
-    height: 60,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 15,
+  width: 64,
+  height: 64,
+  backgroundColor: '#eaf6fb',
+  borderRadius: 10,
+  justifyContent: 'center',
+  alignItems: 'center',
+  marginRight: 15,
   },
   imageButtonText: {
     fontSize: 16,
@@ -745,24 +962,29 @@ const styles = StyleSheet.create({
     marginVertical: 10,
   },
   registerButton: {
-    backgroundColor: '#2E86AB',
-    padding: 15,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 20,
+  backgroundColor: '#3aa0e6',
+  padding: 14,
+  borderRadius: 12,
+  alignItems: 'center',
+  marginTop: 20,
+  shadowColor: '#0b3a58',
+  shadowOffset: { width: 0, height: 6 },
+  shadowOpacity: 0.08,
+  shadowRadius: 12,
+  elevation: 5,
   },
   registerButtonText: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: 'bold',
+  color: '#ffffff',
+  fontSize: 17,
+  fontWeight: '700',
   },
   loginLink: {
-    marginTop: 20,
-    alignItems: 'center',
+  marginTop: 18,
+  alignItems: 'center',
   },
   loginLinkText: {
-    color: '#2E86AB',
-    fontSize: 16,
+  color: '#1B6EA8',
+  fontSize: 15,
   },
   // Modal styles
   modalOverlay: {
@@ -772,11 +994,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: '#ffffff',
-    borderRadius: 15,
-    padding: 20,
-    width: width * 0.8,
-    maxWidth: 300,
+  backgroundColor: '#ffffff',
+  borderRadius: 14,
+  padding: 18,
+  width: width * 0.82,
+  maxWidth: 320,
   },
   modalTitle: {
     fontSize: 18,
@@ -793,12 +1015,12 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   modalButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 10,
-    backgroundColor: '#f0f8ff',
+  flexDirection: 'row',
+  alignItems: 'center',
+  padding: 14,
+  borderRadius: 12,
+  marginBottom: 10,
+  backgroundColor: '#e6f7ff',
   },
   modalButtonTextContainer: {
     marginLeft: 10,

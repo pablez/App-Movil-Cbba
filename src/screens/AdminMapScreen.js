@@ -6,31 +6,196 @@ import {
   Alert,
   TouchableOpacity,
   ActivityIndicator,
-  TextInput,
-  FlatList,
-  Keyboard
+  StatusBar,
+  Platform
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import LocationService from '../services/LocationService';
+import HeaderWithDrawer from '../components/HeaderWithDrawer';
+import { ROUTE_150_DATA, ROUTE_230_DATA, ROUTE_INFO } from '../data/routes';
 
 const AdminMapScreen = ({ navigation, route }) => {
   // ✅ Estados bien organizados
   const [location, setLocation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [mapReady, setMapReady] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [searching, setSearching] = useState(false);
-  const [showSearchResults, setShowSearchResults] = useState(false);
+  const [currentRoute, setCurrentRoute] = useState(null);
+  const [routeData, setRouteData] = useState(null); // Para manejar rutas origen-destino
   const webViewRef = useRef(null);
-  const searchTimeoutRef = useRef(null);
+
+  // Obtener tipo de ruta de los parámetros
+  const routeType = route?.params?.routeType || null;
 
   // ✅ Manejo de efectos
   useEffect(() => {
     getCurrentLocation();
-  }, []);
+    
+    // Configurar ruta si se pasó como parámetro
+    if (routeType) {
+      setCurrentRoute(routeType);
+    }
+  }, [routeType]);
+
+  // Efecto para manejar la ubicación seleccionada desde LocationSearch
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      // Manejar ruta origen-destino
+      if (route.params?.origin && route.params?.destination && route.params?.showRoute) {
+        console.log('🗺️ Recibiendo datos de ruta completa:', {
+          hasOrigin: !!route.params.origin,
+          hasDestination: !!route.params.destination,
+          hasRouteInfo: !!route.params.routeInfo,
+          hasRouteError: !!route.params.routeError,
+          coordinatesCount: route.params.routeInfo?.coordinates?.length || 0
+        });
+        
+        setRouteData({
+          origin: route.params.origin,
+          destination: route.params.destination,
+          routeInfo: route.params.routeInfo,
+          routeError: route.params.routeError
+        });
+        
+        // Limpiar parámetros
+        navigation.setParams({ 
+          origin: null, 
+          destination: null, 
+          showRoute: null, 
+          routeInfo: null, 
+          routeError: null 
+        });
+        return; // No procesar selectedPlace si tenemos una ruta
+      }
+      
+      // Manejar lugar seleccionado (comportamiento existente)
+      if (route.params?.selectedPlace) {
+        const place = route.params.selectedPlace;
+        console.log('📍 Lugar seleccionado recibido:', place);
+        
+        // Actualizar mapa con la ubicación seleccionada
+        updateMapLocation(place.coordinates.latitude, place.coordinates.longitude);
+        
+        // Agregar marcador de búsqueda
+        if (webViewRef.current && mapReady) {
+          // Construir descripción segura
+          let description = 'Ubicación seleccionada';
+          if (place.address && typeof place.address === 'object') {
+            if (place.address.street) {
+              description = place.address.street;
+              if (place.address.housenumber) {
+                description += ' ' + place.address.housenumber;
+              }
+            } else if (place.label) {
+              description = place.label;
+            }
+          } else if (place.address && typeof place.address === 'string') {
+            description = place.address;
+          } else if (place.label) {
+            description = place.label;
+          }
+          
+          const script = `
+            if (window.addSearchMarker) {
+              window.clearSearchMarkers();
+              window.addSearchMarker(
+                ${place.coordinates.latitude}, 
+                ${place.coordinates.longitude}, 
+                "${place.name.replace(/"/g, '\\"')}", 
+                "${description.replace(/"/g, '\\"')}"
+              );
+            }
+          `;
+          
+          console.log('🔧 Enviando marcador al WebView...');
+          try {
+            webViewRef.current.postMessage(script);
+          } catch (error) {
+            console.error('❌ Error enviando mensaje al WebView:', error);
+          }
+        } else {
+          console.warn('⚠️ WebView no disponible para marcador:', { 
+            hasWebView: !!webViewRef.current, 
+            mapReady 
+          });
+        }
+        
+        // Limpiar el parámetro para evitar que se ejecute múltiples veces
+        navigation.setParams({ selectedPlace: null });
+      }
+    });
+
+    return unsubscribe;
+  }, [navigation, mapReady, webViewRef]);
+
+  // Observador directo de route.params: cubre casos donde params llegan justo al navegar
+  useEffect(() => {
+    if (route?.params?.origin && route?.params?.destination && route?.params?.showRoute) {
+      console.log('🗺️ route.params detectados (observer):', {
+        hasOrigin: !!route.params.origin,
+        hasDestination: !!route.params.destination,
+        hasRouteInfo: !!route.params.routeInfo
+      });
+
+      setRouteData({
+        origin: route.params.origin,
+        destination: route.params.destination,
+        routeInfo: route.params.routeInfo,
+        routeError: route.params.routeError
+      });
+
+      // Limpiar parámetros para evitar procesamiento duplicado
+      navigation.setParams({ origin: null, destination: null, showRoute: null, routeInfo: null, routeError: null });
+    }
+  }, [route?.params]);
+
+  // Efecto para manejar rutas origen-destino con reintentos si el WebView/a mapa no están listos
+  useEffect(() => {
+    let attempts = 0;
+    const maxAttempts = 15; // ~4.5s con intervalo 300ms
+    let intervalId = null;
+
+    const tryShow = () => {
+      attempts += 1;
+      if (!routeData) {
+        // nada que mostrar
+        if (intervalId) { clearInterval(intervalId); intervalId = null; }
+        return;
+      }
+
+      const hasWebView = !!webViewRef.current;
+      console.log('⏳ Intento de mostrar ruta', attempts, '/', maxAttempts, { hasWebView, mapReady });
+
+      if (hasWebView && mapReady) {
+        console.log('🛣️ Mostrando ruta en el mapa (entrada confirmada):', routeData);
+        try {
+          showCustomRoute(routeData);
+        } catch (e) {
+          console.error('❌ Error al ejecutar showCustomRoute:', e);
+        }
+        if (intervalId) { clearInterval(intervalId); intervalId = null; }
+        return;
+      }
+
+      if (attempts >= maxAttempts) {
+        console.warn('⚠️ No fue posible mostrar la ruta: WebView o mapa no listos tras varios intentos.');
+        if (intervalId) { clearInterval(intervalId); intervalId = null; }
+      }
+    };
+
+    if (routeData) {
+      // intentar inmediatamente
+      tryShow();
+      // si no se mostró, arrancar reintentos periódicos
+      if (!(webViewRef.current && mapReady)) {
+        intervalId = setInterval(tryShow, 300);
+      }
+    }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [routeData, mapReady]);
 
   // ✅ Funciones bien estructuradas
   const getCurrentLocation = async () => {
@@ -97,17 +262,27 @@ const AdminMapScreen = ({ navigation, route }) => {
           }
         `;
         
+        console.log('🔧 Actualizando ubicación en WebView...');
         webViewRef.current.postMessage(script);
       } catch (error) {
         console.error('❌ Error actualizando ubicación en mapa:', error);
         // Fallback sin dirección
-        const script = `
-          if (window.updateLocation) {
-            window.updateLocation(${latitude}, ${longitude}, "Ubicación actual");
-          }
-        `;
-        webViewRef.current.postMessage(script);
+        try {
+          const script = `
+            if (window.updateLocation) {
+              window.updateLocation(${latitude}, ${longitude}, "Ubicación actual");
+            }
+          `;
+          webViewRef.current.postMessage(script);
+        } catch (fallbackError) {
+          console.error('❌ Error en fallback de updateLocation:', fallbackError);
+        }
       }
+    } else {
+      console.warn('⚠️ WebView no disponible para updateLocation:', { 
+        hasWebView: !!webViewRef.current, 
+        mapReady 
+      });
     }
   };
 
@@ -138,74 +313,133 @@ const AdminMapScreen = ({ navigation, route }) => {
     }
   };
 
-  // 🔍 Búsqueda en tiempo real con debounce
-  const handleSearchChange = (text) => {
-    setSearchQuery(text);
+  // 🚌 Mostrar ruta de transporte público
+  const showTransportRoute = (routeType) => {
+    if (!webViewRef.current || !mapReady) return;
     
-    // Limpiar timeout anterior
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
+    let routeData = null;
+    let routeInfo = null;
+    
+    // Seleccionar datos de ruta según el tipo
+    switch (routeType) {
+      case 'line150':
+        routeData = ROUTE_150_DATA;
+        routeInfo = ROUTE_INFO.line150;
+        break;
+      case 'line230':
+        routeData = ROUTE_230_DATA;
+        routeInfo = ROUTE_INFO.line230;
+        break;
+      default:
+        console.warn('⚠️ Tipo de ruta no válido:', routeType);
+        return;
     }
     
-    if (text.length < 2) {
-      setSearchResults([]);
-      setShowSearchResults(false);
+    if (!routeData || !routeData.features || routeData.features.length === 0) {
+      console.warn('⚠️ No se encontraron datos de ruta para:', routeType);
       return;
     }
     
-    // Debounce de 500ms para evitar muchas consultas
-    searchTimeoutRef.current = setTimeout(() => {
-      performSearch(text);
-    }, 500);
-  };
-
-  const performSearch = async (query) => {
-    if (!query || query.length < 2) return;
+    const coordinates = routeData.features[0].geometry.coordinates;
+    const routeColor = routeInfo.color;
+    const routeName = routeInfo.name;
     
-    setSearching(true);
-    try {
-      const result = await LocationService.searchPlacesRealTime(query, location);
-      if (result.success) {
-        setSearchResults(result.places);
-        setShowSearchResults(result.places.length > 0);
+    // Script para mostrar la ruta en el mapa
+    const script = `
+      if (window.addTransportRoute) {
+        const coordinates = ${JSON.stringify(coordinates)};
+        window.addTransportRoute(coordinates, "${routeColor}", "${routeName}");
+        console.log('🚌 Ruta ${routeName} agregada al mapa');
+        
+        // Centrar el mapa en la ruta
+        if (coordinates.length > 0) {
+          const centerLat = coordinates[Math.floor(coordinates.length / 2)][1];
+          const centerLng = coordinates[Math.floor(coordinates.length / 2)][0];
+          window.centerMap(centerLng, centerLat, 12);
+        }
       } else {
-        console.warn('⚠️ Error en búsqueda:', result.error);
-        setSearchResults([]);
-        setShowSearchResults(false);
+        console.warn('⚠️ Función addTransportRoute no disponible');
       }
-    } catch (error) {
-      console.error('❌ Error realizando búsqueda:', error);
-      setSearchResults([]);
-      setShowSearchResults(false);
-    } finally {
-      setSearching(false);
-    }
+    `;
+    
+    webViewRef.current.postMessage(script);
+    console.log(`🚌 Mostrando ruta: ${routeName}`);
   };
 
-  const selectSearchResult = async (place) => {
-    setSearchQuery(place.name);
-    setShowSearchResults(false);
-    Keyboard.dismiss();
+  // Función para mostrar ruta personalizada (origen -> destino)
+  const showCustomRoute = (routeData) => {
+    if (!webViewRef.current || !routeData) return;
     
-    // Actualizar mapa con la ubicación seleccionada
-    await updateMapLocation(place.coordinates.latitude, place.coordinates.longitude);
+    const { origin, destination, routeInfo, originName = 'Tu ubicación', destinationName = 'Destino' } = routeData;
     
-    // Agregar marcador de búsqueda
-    if (webViewRef.current && mapReady) {
+    console.log('🛣️ Mostrando ruta personalizada:', originName, '->', destinationName);
+    console.log('📊 Info de ruta:', routeInfo ? 'Con ruta calculada' : 'Sin ruta calculada');
+    
+    if (routeInfo && routeInfo.coordinates && routeInfo.coordinates.length > 2) {
+      // Mostrar ruta calculada con coordenadas detalladas
+      console.log('🗺️ Mostrando ruta con', routeInfo.coordinates.length, 'puntos');
+      
       const script = `
-        if (window.addSearchMarker) {
-          window.clearSearchMarkers();
-          window.addSearchMarker(
-            ${place.coordinates.latitude}, 
-            ${place.coordinates.longitude}, 
-            "${place.name.replace(/"/g, '\\"')}", 
-            "${place.address.replace(/"/g, '\\"')}"
+        if (window.showDetailedRoute) {
+          const routeCoords = ${JSON.stringify(routeInfo.coordinates)};
+          window.showDetailedRoute(
+            ${origin.latitude}, 
+            ${origin.longitude}, 
+            ${destination.latitude}, 
+            ${destination.longitude},
+            routeCoords,
+            "${originName}",
+            "${destinationName}",
+            ${routeInfo.distance},
+            ${routeInfo.duration}
           );
+          console.log('🛣️ Ruta detallada mostrada con ${routeInfo.coordinates.length} puntos');
+        } else if (window.showRoute) {
+          window.showRoute(
+            ${origin.latitude}, 
+            ${origin.longitude}, 
+            ${destination.latitude}, 
+            ${destination.longitude},
+            "${originName}",
+            "${destinationName}"
+          );
+          console.log('🛣️ Ruta simple mostrada (fallback)');
+        } else {
+          console.warn('⚠️ Funciones de ruta no disponibles');
         }
       `;
+      
+      webViewRef.current.postMessage(script);
+    } else {
+      // Fallback a línea recta si no hay ruta calculada
+      const script = `
+        if (window.showRoute) {
+          window.showRoute(
+            ${origin.latitude}, 
+            ${origin.longitude}, 
+            ${destination.latitude}, 
+            ${destination.longitude},
+            "${originName}",
+            "${destinationName}"
+          );
+          console.log('🛣️ Ruta simple mostrada (sin coordenadas detalladas)');
+        } else {
+          console.warn('⚠️ Función showRoute no disponible');
+        }
+      `;
+      
       webViewRef.current.postMessage(script);
     }
+    
+    console.log('🛣️ Script de ruta enviado al WebView');
   };
+
+  // Efecto para mostrar ruta cuando cambia currentRoute
+  useEffect(() => {
+    if (currentRoute && mapReady) {
+      showTransportRoute(currentRoute);
+    }
+  }, [currentRoute, mapReady]);
 
   // Centrar en la ubicación actual
   const centerOnLocation = () => {
@@ -382,6 +616,341 @@ const AdminMapScreen = ({ navigation, route }) => {
                 window.searchMarkers = [];
             };
 
+            // 🚌 Funciones para rutas de transporte público
+            window.transportRoutes = [];
+
+            window.addTransportRoute = function(coordinates, color, routeName) {
+                console.log('🚌 Agregando ruta:', routeName);
+                
+                // Limpiar rutas anteriores
+                window.clearTransportRoutes();
+                
+                // Convertir coordenadas [lng, lat] a [lat, lng] para Leaflet
+                const latLngCoords = coordinates.map(coord => [coord[1], coord[0]]);
+                
+                // Crear polilínea para la ruta
+                const route = L.polyline(latLngCoords, {
+                    color: color,
+                    weight: 4,
+                    opacity: 0.8,
+                    smoothFactor: 1.0
+                }).addTo(window.map);
+                
+                // Agregar popup con información de la ruta
+                route.bindPopup(\`<b>\${routeName}</b><br>Haz clic en la ruta para ver detalles\`);
+                
+                // Guardar referencia
+                window.transportRoutes.push(route);
+                
+                // Mostrar marcadores de inicio y fin
+                if (latLngCoords.length > 0) {
+                    const startPoint = latLngCoords[0];
+                    const endPoint = latLngCoords[latLngCoords.length - 1];
+                    
+                    const startIcon = L.divIcon({
+                        className: 'route-marker',
+                        html: \`<div style="
+                            background: \${color}; color: white; padding: 4px 8px; 
+                            border-radius: 10px; font-size: 10px; font-weight: bold;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                        ">INICIO</div>\`,
+                        iconSize: [50, 20],
+                        iconAnchor: [25, 10]
+                    });
+                    
+                    const endIcon = L.divIcon({
+                        className: 'route-marker',
+                        html: \`<div style="
+                            background: \${color}; color: white; padding: 4px 8px; 
+                            border-radius: 10px; font-size: 10px; font-weight: bold;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                        ">FIN</div>\`,
+                        iconSize: [50, 20],
+                        iconAnchor: [25, 10]
+                    });
+                    
+                    const startMarker = L.marker(startPoint, {icon: startIcon}).addTo(window.map);
+                    const endMarker = L.marker(endPoint, {icon: endIcon}).addTo(window.map);
+                    
+                    window.transportRoutes.push(startMarker, endMarker);
+                }
+                
+                console.log('✅ Ruta agregada exitosamente:', routeName);
+            };
+
+            window.clearTransportRoutes = function() {
+                window.transportRoutes.forEach(item => {
+                    window.map.removeLayer(item);
+                });
+                window.transportRoutes = [];
+            };
+
+            window.centerMap = function(lng, lat, zoom = 13) {
+                window.map.setView([lat, lng], zoom, {animate: true});
+            };
+
+            // 🛣️ Funciones para rutas personalizadas (origen -> destino)
+            window.routeLayer = null;
+            window.originMarker = null;
+            window.destinationMarker = null;
+
+            window.showRoute = function(originLat, originLng, destLat, destLng, originName = 'Origen', destName = 'Destino') {
+                console.log('🛣️ Mostrando ruta:', originName, '->', destName);
+                
+                // Limpiar ruta anterior
+                window.clearRoute();
+                
+                try {
+                    // Crear marcador de origen (verde)
+                    const originIcon = L.divIcon({
+                        className: 'origin-marker',
+                        html: \`<div style="
+                            width: 16px; height: 16px; border-radius: 50%; 
+                            background: #4CAF50; border: 3px solid white; 
+                            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                        "></div>\`,
+                        iconSize: [16, 16],
+                        iconAnchor: [8, 8]
+                    });
+                    
+                    window.originMarker = L.marker([originLat, originLng], {icon: originIcon})
+                        .addTo(window.map)
+                        .bindPopup(\`📍 <b>\${originName}</b>\`);
+                    
+                    // Crear marcador de destino (rojo)
+                    const destIcon = L.divIcon({
+                        className: 'destination-marker',
+                        html: \`<div style="
+                            width: 16px; height: 16px; border-radius: 50%; 
+                            background: #F44336; border: 3px solid white; 
+                            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                        "></div>\`,
+                        iconSize: [16, 16],
+                        iconAnchor: [8, 8]
+                    });
+                    
+                    window.destinationMarker = L.marker([destLat, destLng], {icon: destIcon})
+                        .addTo(window.map)
+                        .bindPopup(\`🎯 <b>\${destName}</b>\`);
+                    
+                    // Crear línea recta entre origen y destino (ruta simple)
+                    const routeCoords = [
+                        [originLat, originLng],
+                        [destLat, destLng]
+                    ];
+                    
+                    window.routeLayer = L.polyline(routeCoords, {
+                        color: '#2196F3',
+                        weight: 4,
+                        opacity: 0.7,
+                        dashArray: '10, 5',
+                        smoothFactor: 1.0
+                    }).addTo(window.map);
+                    
+                    // Calcular distancia aproximada
+                    const distance = window.calculateDistance(originLat, originLng, destLat, destLng);
+                    
+                    // Mostrar popup con información de la ruta
+                    const midLat = (originLat + destLat) / 2;
+                    const midLng = (originLng + destLng) / 2;
+                    
+                    const routeInfo = L.popup({
+                        closeButton: true,
+                        autoClose: false
+                    })
+                        .setLatLng([midLat, midLng])
+                        .setContent(\`
+                            <div style="text-align: center;">
+                                <b>🛣️ Ruta</b><br>
+                                <small>\${originName} → \${destName}</small><br>
+                                <b>📏 \${distance.toFixed(1)} km</b>
+                            </div>
+                        \`)
+                        .openOn(window.map);
+                    
+                    // Ajustar vista del mapa para mostrar toda la ruta
+                    const bounds = L.latLngBounds([
+                        [originLat, originLng],
+                        [destLat, destLng]
+                    ]);
+                    
+                    window.map.fitBounds(bounds, {
+                        padding: [20, 20],
+                        maxZoom: 15
+                    });
+                    
+                    console.log('✅ Ruta mostrada correctamente');
+                    
+                    // Notificar a React Native
+                    if (window.ReactNativeWebView) {
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'routeDisplayed',
+                            distance: distance.toFixed(1)
+                        }));
+                    }
+                    
+                } catch (error) {
+                    console.error('❌ Error mostrando ruta:', error);
+                    if (window.ReactNativeWebView) {
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'routeError',
+                            error: error.message
+                        }));
+                    }
+                }
+            };
+
+            // Función para calcular distancia entre dos puntos (Haversine formula)
+            window.calculateDistance = function(lat1, lng1, lat2, lng2) {
+                const R = 6371; // Radio de la Tierra en kilómetros
+                const dLat = (lat2 - lat1) * Math.PI / 180;
+                const dLng = (lng2 - lng1) * Math.PI / 180;
+                const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                         Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                         Math.sin(dLng/2) * Math.sin(dLng/2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                return R * c;
+            };
+
+            // 🛣️ Función para mostrar ruta detallada con coordenadas precisas de OpenRouteService
+            window.showDetailedRoute = function(originLat, originLng, destLat, destLng, routeCoords, originName = 'Origen', destName = 'Destino', distance = null, duration = null) {
+                console.log('🗺️ Mostrando ruta detallada:', originName, '->', destName);
+                console.log('📊 Coordenadas de ruta:', routeCoords.length, 'puntos');
+                
+                // Limpiar ruta anterior
+                window.clearRoute();
+                
+                try {
+                    // Crear marcador de origen (verde)
+                    const originIcon = L.divIcon({
+                        className: 'origin-marker',
+                        html: \`<div style="
+                            width: 16px; height: 16px; border-radius: 50%; 
+                            background: #4CAF50; border: 3px solid white; 
+                            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                        "></div>\`,
+                        iconSize: [16, 16],
+                        iconAnchor: [8, 8]
+                    });
+                    
+                    window.originMarker = L.marker([originLat, originLng], {icon: originIcon})
+                        .addTo(window.map)
+                        .bindPopup(\`📍 <b>\${originName}</b>\`);
+                    
+                    // Crear marcador de destino (rojo)
+                    const destIcon = L.divIcon({
+                        className: 'destination-marker',
+                        html: \`<div style="
+                            width: 16px; height: 16px; border-radius: 50%; 
+                            background: #F44336; border: 3px solid white; 
+                            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                        "></div>\`,
+                        iconSize: [16, 16],
+                        iconAnchor: [8, 8]
+                    });
+                    
+                    window.destinationMarker = L.marker([destLat, destLng], {icon: destIcon})
+                        .addTo(window.map)
+                        .bindPopup(\`🎯 <b>\${destName}</b>\`);
+                    
+                    // Convertir coordenadas [lng, lat] a [lat, lng] para Leaflet
+                    const leafletCoords = routeCoords.map(coord => [coord[1], coord[0]]);
+                    
+                    // Crear polilínea para la ruta detallada
+                    window.routeLayer = L.polyline(leafletCoords, {
+                        color: '#2196F3',
+                        weight: 4,
+                        opacity: 0.8,
+                        smoothFactor: 1.0
+                    }).addTo(window.map);
+                    
+                    // Preparar información para el popup
+                    let routeInfoText = \`
+                        <div style="text-align: center;">
+                            <b>🛣️ Ruta Calculada</b><br>
+                            <small>\${originName} → \${destName}</small><br>
+                    \`;
+                    
+                    if (distance && duration) {
+                        const distanceKm = (distance / 1000).toFixed(1);
+                        const durationMin = Math.round(duration / 60);
+                        routeInfoText += \`
+                            <b>📏 \${distanceKm} km</b><br>
+                            <b>⏱️ \${durationMin} min</b>
+                        \`;
+                    } else if (distance) {
+                        const distanceKm = (distance / 1000).toFixed(1);
+                        routeInfoText += \`<b>📏 \${distanceKm} km</b>\`;
+                    }
+                    
+                    routeInfoText += \`</div>\`;
+                    
+                    // Mostrar popup en el punto medio de la ruta
+                    const midIndex = Math.floor(leafletCoords.length / 2);
+                    const midPoint = leafletCoords[midIndex] || [(originLat + destLat) / 2, (originLng + destLng) / 2];
+                    
+                    const routeInfo = L.popup({
+                        closeButton: true,
+                        autoClose: false
+                    })
+                        .setLatLng(midPoint)
+                        .setContent(routeInfoText)
+                        .openOn(window.map);
+                    
+                    // Ajustar vista del mapa para mostrar toda la ruta
+                    const bounds = L.latLngBounds(leafletCoords);
+                    window.map.fitBounds(bounds, {
+                        padding: [20, 20],
+                        maxZoom: 15
+                    });
+                    
+                    console.log('✅ Ruta detallada mostrada correctamente');
+                    
+                    // Notificar a React Native
+                    if (window.ReactNativeWebView) {
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'detailedRouteDisplayed',
+                            distance: distance ? (distance / 1000).toFixed(1) : 'N/A',
+                            duration: duration ? Math.round(duration / 60) : 'N/A',
+                            points: routeCoords.length
+                        }));
+                    }
+                    
+                } catch (error) {
+                    console.error('❌ Error mostrando ruta detallada:', error);
+                    
+                    // Fallback a ruta simple si falla
+                    if (window.showRoute) {
+                        console.log('🔄 Fallback a ruta simple');
+                        window.showRoute(originLat, originLng, destLat, destLng, originName, destName);
+                    }
+                    
+                    if (window.ReactNativeWebView) {
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'routeError',
+                            error: error.message
+                        }));
+                    }
+                }
+            };
+
+            // Función para limpiar la ruta actual
+            window.clearRoute = function() {
+                if (window.routeLayer) {
+                    window.map.removeLayer(window.routeLayer);
+                    window.routeLayer = null;
+                }
+                if (window.originMarker) {
+                    window.map.removeLayer(window.originMarker);
+                    window.originMarker = null;
+                }
+                if (window.destinationMarker) {
+                    window.map.removeLayer(window.destinationMarker);
+                    window.destinationMarker = null;
+                }
+                console.log('🧹 Ruta limpiada');
+            };
+
             // Manejo de mensajes desde React Native
             window.addEventListener('message', function(event) {
                 try { eval(event.data); } catch (e) { console.error('❌ Error ejecutando script:', e); }
@@ -407,100 +976,93 @@ const AdminMapScreen = ({ navigation, route }) => {
     );
   }
 
-  return (
+    return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Ionicons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
-        <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerTitle}>📍 Mapa Admin</Text>
-          <Text style={styles.subtitle}>OpenRouteService - Cochabamba</Text>
-        </View>
-      </View>
+      <StatusBar backgroundColor="#1976D2" barStyle="light-content" />
+      
+      {/* Header con drawer */}
+      <HeaderWithDrawer 
+        title={currentRoute && ROUTE_INFO[currentRoute] 
+          ? `🚌 ${ROUTE_INFO[currentRoute].name}` 
+          : "📍 Mapa"
+        } 
+      />
 
-      {/* Buscador */}
       <View style={styles.searchContainer}>
-        <View style={styles.searchInputContainer}>
-          <Ionicons name="search" size={20} color="#666" style={styles.searchIcon} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Buscar lugares en Cochabamba..."
-            value={searchQuery}
-            onChangeText={handleSearchChange}
-            autoCorrect={false}
-            autoCapitalize="words"
-          />
-          {searching && <ActivityIndicator size="small" color="#2196F3" />}
-          {searchQuery.length > 0 && (
-            <TouchableOpacity 
-              onPress={() => {
-                setSearchQuery('');
-                setSearchResults([]);
-                setShowSearchResults(false);
-              }}
-            >
-              <Ionicons name="close-circle" size={20} color="#666" />
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
-
-      {/* Resultados de búsqueda */}
-      {showSearchResults && (
-        <View style={styles.searchResultsContainer}>
-          <FlatList
-            data={searchResults}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={styles.searchResultItem}
-                onPress={() => selectSearchResult(item)}
-              >
-                <View style={styles.searchResultContent}>
-                  <Text style={styles.searchResultName}>{item.name}</Text>
-                  <Text style={styles.searchResultAddress}>{item.address}</Text>
-                  {item.distance && (
-                    <Text style={styles.searchResultDistance}>
-                      📍 {item.distance.toFixed(1)} km
-                    </Text>
-                  )}
-                </View>
-                <Ionicons name="chevron-forward" size={20} color="#666" />
-              </TouchableOpacity>
-            )}
-            style={styles.searchResultsList}
-            keyboardShouldPersistTaps="handled"
-          />
-        </View>
-      )}
-
-      {/* Controles */}
-      <View style={styles.controlsContainer}>
         <TouchableOpacity 
-          style={[styles.controlButton, !location && styles.controlButtonDisabled]} 
-          onPress={centerOnLocation}
-          disabled={!location}
+          style={styles.searchInputContainer}
+          onPress={() => {
+            console.log('🔍 Navegando a LocationSearch para calcular ruta...');
+            navigation.navigate('LocationSearch');
+          }}
+          activeOpacity={0.8}
         >
-          <Ionicons name="locate" size={20} color="#fff" />
-          <Text style={styles.controlButtonText}>
-            {location ? ' Mi Ubicación' : ' Obteniendo GPS...'}
-          </Text>
+          <Ionicons name="search" size={18} color="#666" style={styles.searchIcon} />
+          <Text style={styles.searchPlaceholder}>Buscar lugares en Cochabamba...</Text>
+          <View style={styles.searchButtonContainer}>
+            <Ionicons name="location" size={16} color="#2196F3" />
+          </View>
         </TouchableOpacity>
-        
-        <Text style={styles.locationText}>
-          {location 
-            ? `📍 ${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
-            : '🔍 Buscando ubicación...'
-          }
-        </Text>
       </View>
 
-      {/* Mapa */}
+      {/* Controles - Diseño más compacto y moderno */}
+      <View style={styles.controlsContainer}>
+        {/* Información de la ruta actual */}
+        {currentRoute && ROUTE_INFO[currentRoute] && (
+          <View style={styles.routeInfoContainer}>
+            <View style={styles.routeHeader}>
+              <View style={[styles.routeIcon, { backgroundColor: ROUTE_INFO[currentRoute].color }]}>
+                <Ionicons name="bus" size={16} color="#fff" />
+              </View>
+              <Text style={styles.routeTitle}>
+                {ROUTE_INFO[currentRoute].name}
+              </Text>
+              <TouchableOpacity 
+                onPress={() => setCurrentRoute(null)} 
+                style={styles.closeRouteButton}
+              >
+                <Ionicons name="close" size={16} color="#666" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.routeDescription}>
+              {ROUTE_INFO[currentRoute].description}
+            </Text>
+            <View style={styles.routeStats}>
+              <View style={styles.routeStat}>
+                <Text style={styles.routeStatText}>📏 {ROUTE_INFO[currentRoute].distance}</Text>
+              </View>
+              <View style={styles.routeStat}>
+                <Text style={styles.routeStatText}>⏱️ {ROUTE_INFO[currentRoute].duration}</Text>
+              </View>
+              <View style={styles.routeStat}>
+                <Text style={styles.routeStatText}>💰 {ROUTE_INFO[currentRoute].fare}</Text>
+              </View>
+            </View>
+          </View>
+        )}
+        
+        <View style={styles.bottomControls}>
+          <TouchableOpacity 
+            style={[styles.controlButton, !location && styles.controlButtonDisabled]} 
+            onPress={centerOnLocation}
+            disabled={!location}
+          >
+            <Ionicons name="locate" size={18} color="#fff" />
+            <Text style={styles.controlButtonText}>
+              {location ? 'Mi Ubicación' : 'Buscando GPS...'}
+            </Text>
+          </TouchableOpacity>
+          
+          <Text style={styles.locationText}>
+            {location 
+              ? `📍 ${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}`
+              : '🔍 Buscando ubicación...'
+            }
+          </Text>
+        </View>
+      </View>
+
+      {/* Mapa - Sin márgenes para aprovechar toda la pantalla */}
       <View style={styles.mapContainer}>
         <WebView
           ref={webViewRef}
@@ -525,176 +1087,255 @@ const AdminMapScreen = ({ navigation, route }) => {
             </View>
           )}
         />
+        
+        {/* Botón flotante para búsqueda avanzada */}
+        <TouchableOpacity 
+          style={styles.floatingSearchButton}
+          onPress={() => {
+            console.log('🔍 Navegando a LocationSearch para calcular ruta (botón flotante)...');
+            navigation.navigate('LocationSearch');
+          }}
+          activeOpacity={0.8}
+        >
+          <View style={styles.floatingButtonContent}>
+            <Ionicons name="search-circle" size={24} color="#fff" />
+            <Text style={styles.floatingButtonText}>Buscar</Text>
+          </View>
+        </TouchableOpacity>
       </View>
     </View>
   );
 };
 
-// ✅ Diseño optimizado para pantalla 6.43"
+// ✅ Diseño moderno y compacto para mejor aprovechamiento de pantalla
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f8f9fa',
   },
   header: {
-    backgroundColor: '#2196F3',
-    paddingTop: 50, // Status bar space
-    paddingBottom: 15,
-    paddingHorizontal: 15,
+    backgroundColor: '#1976D2',
+    paddingTop: Platform.OS === 'ios' ? 50 : 25, // Ajuste para status bar
+    paddingBottom: 12,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 4,
   },
   backButton: {
-    marginRight: 15,
-    padding: 8,
-    borderRadius: 8,
+    marginRight: 12,
+    padding: 6,
+    borderRadius: 6,
   },
   headerTitleContainer: {
     flex: 1,
   },
   headerTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
+    fontSize: 20,
+    fontWeight: '700',
     color: '#fff',
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#E3F2FD',
     marginTop: 2,
   },
   searchContainer: {
     backgroundColor: '#fff',
-    paddingHorizontal: 15,
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.08,
     shadowRadius: 2,
     elevation: 2,
   },
   searchInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-    borderRadius: 25,
-    paddingHorizontal: 15,
-    paddingVertical: 12,
-  },
-  searchIcon: {
-    marginRight: 10,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: '#333',
-  },
-  searchResultsContainer: {
-    backgroundColor: '#fff',
-    maxHeight: 250,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  searchResultsList: {
-    backgroundColor: '#fff',
-  },
-  searchResultItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 15,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  searchResultContent: {
-    flex: 1,
-  },
-  searchResultName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  searchResultAddress: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 2,
-  },
-  searchResultDistance: {
-    fontSize: 12,
-    color: '#2196F3',
-    marginTop: 2,
-  },
-  controlsContainer: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 15,
+    backgroundColor: '#f5f6f7',
+    borderRadius: 20,
+    paddingHorizontal: 12,
     paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 2,
   },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchPlaceholder: {
+    flex: 1,
+    fontSize: 15,
+    color: '#666',
+    paddingVertical: 0,
+  },
+  searchButtonContainer: {
+    backgroundColor: '#e3f2fd',
+    borderRadius: 12,
+    padding: 6,
+    marginLeft: 8,
+  },
+  controlsContainer: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  bottomControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   controlButton: {
     backgroundColor: '#4CAF50',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 25, // Botones redondeados modernos
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    marginBottom: 8,
-    shadowColor: '#000',
+    shadowColor: '#4CAF50',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
   },
   controlButtonDisabled: {
     backgroundColor: '#BDBDBD',
+    shadowColor: '#BDBDBD',
   },
   controlButtonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
+    marginLeft: 4,
   },
   locationText: {
-    fontSize: 12,
+    fontSize: 10,
     color: '#666',
-    textAlign: 'center',
     fontFamily: 'monospace',
+    flex: 1,
+    textAlign: 'right',
+    marginLeft: 8,
   },
   mapContainer: {
     flex: 1,
-    margin: 8,
-    borderRadius: 15, // Esquinas redondeadas
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    backgroundColor: '#fff',
+    position: 'relative',
   },
   map: {
     flex: 1,
+  },
+  floatingSearchButton: {
+    position: 'absolute',
+    bottom: 20,
+    right: 16,
+    backgroundColor: '#FF5722',
+    borderRadius: 28,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    shadowColor: '#FF5722',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  floatingButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  floatingButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    marginLeft: 6,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f8f9fa',
   },
   loadingText: {
-    marginTop: 10,
-    fontSize: 16,
+    marginTop: 12,
+    fontSize: 15,
     color: '#2196F3',
     fontWeight: '600',
+  },
+  // Estilos modernos para información de rutas
+  routeInfoContainer: {
+    backgroundColor: '#fff',
+    marginBottom: 8,
+    borderRadius: 12,
+    padding: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#2196F3',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  routeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  routeIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  routeTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#333',
+    flex: 1,
+  },
+  closeRouteButton: {
+    padding: 4,
+    borderRadius: 12,
+    backgroundColor: '#f5f6f7',
+  },
+  routeDescription: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 8,
+    fontStyle: 'italic',
+    lineHeight: 18,
+  },
+  routeStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  routeStat: {
+    backgroundColor: '#f8f9fa',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  routeStatText: {
+    fontSize: 11,
+    color: '#495057',
+    fontWeight: '500',
   },
 });
 
