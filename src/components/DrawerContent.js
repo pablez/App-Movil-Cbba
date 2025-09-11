@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import { db, auth } from '../config/firebase';
 import {
   View,
   Text,
@@ -15,6 +17,42 @@ import { USER_ROLES } from '../utils/constants';
 const DrawerContent = ({ navigation, state }) => {
   const { user, userRole, isAdmin, logout } = useAuth();
 
+  const [persistedRoutes, setPersistedRoutes] = useState([]);
+
+  useEffect(() => {
+    // Solo suscribirse si es admin
+    if (!isAdmin) return;
+
+    // Comprobación rápida: asegurar que auth.currentUser existe y obtener token para debug
+    const current = auth && auth.currentUser ? auth.currentUser : null;
+    if (!current) {
+      console.warn('No hay usuario Firebase activo; no se suscribirá a rutas. Asegúrate de iniciar sesión en Firebase Auth.');
+      return;
+    }
+
+    // Resolver token para verificar que el SDK envía credenciales al backend
+    try {
+      console.log('Firebase currentUser uid:', current.uid);
+      current.getIdToken().then(t => console.log('Firebase idToken (short):', (t || '').slice(0, 20) + '...'))
+        .catch(e => console.warn('No se pudo obtener idToken:', e));
+    } catch (e) {
+      console.warn('getIdToken no disponible en current user:', e);
+    }
+
+    const q = query(collection(db, 'routes'), orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(q, (snap) => {
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setPersistedRoutes(docs);
+    }, (err) => {
+      console.error('Error cargando rutas en DrawerContent', err);
+      // Si es error de permisos, avisar al usuario/admin
+      if (err && err.code && err.code.includes('permission')) {
+        console.warn('Firestore denegó el acceso a /routes — revisa reglas o autenticación.');
+      }
+    });
+    return () => unsub();
+  }, [isAdmin]);
+
   const handleLogout = () => {
     logout();
     navigation.closeDrawer();
@@ -25,109 +63,72 @@ const DrawerContent = ({ navigation, state }) => {
     navigation.closeDrawer();
   };
 
-  const menuItems = [
-    // Siempre visible - Autenticación
-    ...(!user ? [
-      {
-        id: 'login',
-        title: 'Iniciar Sesión',
-        icon: 'log-in-outline',
-        onPress: () => handleNavigation('Login'),
-        color: '#2196F3'
-      },
-      {
-        id: 'register',
-        title: 'Registrarse',
-        icon: 'person-add-outline',
-        onPress: () => handleNavigation('Register'),
-        color: '#4CAF50'
-      }
-    ] : []),
+  // Construcción segura del menú por pasos para evitar errores de sintaxis con spreads
+  const menuItems = [];
 
-    // Usuario autenticado
-    ...(user ? [
-      {
-        id: 'profile',
-        title: 'Editar Perfil',
-        icon: 'person-outline',
-        onPress: () => handleNavigation('EditProfile'),
-        color: '#FF9800'
-      },
-      {
-        id: 'map',
-        title: 'Mapa',
-        icon: 'map-outline',
-        onPress: () => {
-          // Navegar al mapa correcto según el rol del usuario
-          let target = 'AdminMap';
-          if (isAdmin) target = 'AdminMap';
-          else if (userRole === USER_ROLES.PASSENGER) target = 'PassengerMain';
-          else if (userRole === USER_ROLES.DRIVER) target = 'DriverMain';
-          handleNavigation(target);
-        },
-        color: '#2196F3'
-      },
-      {
-        id: 'line150',
-        title: 'Línea 150',
-        icon: 'bus-outline',
-        onPress: () => handleNavigation('AdminMap', { routeType: 'line150' }),
-        color: '#FF5722'
-      },
-      {
-        id: 'line230',
-        title: 'Línea 230',
-        icon: 'bus-outline',
-        onPress: () => handleNavigation('AdminMap', { routeType: 'line230' }),
-        color: '#9C27B0'
-      }
-    ] : []),
+  // Siempre visible - autenticación
+  if (!user) {
+    menuItems.push({ id: 'login', title: 'Iniciar Sesión', icon: 'log-in-outline', onPress: () => handleNavigation('Login'), color: '#2196F3' });
+    menuItems.push({ id: 'register', title: 'Registrarse', icon: 'person-add-outline', onPress: () => handleNavigation('Register'), color: '#4CAF50' });
+  }
 
-    // Solo para Admin
-    ...(isAdmin ? [
-      {
-        id: 'admin-dashboard',
-        title: 'Panel Admin',
-        icon: 'shield-checkmark-outline',
-        onPress: () => handleNavigation('AdminDashboard'),
-        color: '#9C27B0'
-      }
-    ] : []),
+  // Usuario autenticado
+  if (user) {
+    menuItems.push({ id: 'profile', title: 'Editar Perfil', icon: 'person-outline', onPress: () => handleNavigation('EditProfile'), color: '#FF9800' });
+    menuItems.push({
+      id: 'map', title: 'Mapa', icon: 'map-outline', onPress: () => {
+        let target = 'AdminMap';
+        if (isAdmin) target = 'AdminMap';
+        else if (userRole === USER_ROLES.PASSENGER) target = 'PassengerMain';
+        else if (userRole === USER_ROLES.DRIVER) target = 'DriverMain';
+        handleNavigation(target);
+      }, color: '#2196F3'
+    });
+  // No mostrar las entradas integradas si ya existe una ruta persistida con ese nombre
+  const has150 = persistedRoutes.some(r => (r.name || '').toLowerCase() === 'línea 150' || (r.name || '').toLowerCase() === 'linea 150' || (r.name || '').toLowerCase() === '150');
+  const has230 = persistedRoutes.some(r => (r.name || '').toLowerCase() === 'línea 230' || (r.name || '').toLowerCase() === 'linea 230' || (r.name || '').toLowerCase() === '230');
+  if (!has150) menuItems.push({ id: 'line150', title: 'Línea 150', icon: 'bus-outline', onPress: () => handleNavigation('AdminMap', { routeType: 'line150' }), color: '#FF5722' });
+  if (!has230) menuItems.push({ id: 'line230', title: 'Línea 230', icon: 'bus-outline', onPress: () => handleNavigation('AdminMap', { routeType: 'line230' }), color: '#9C27B0' });
+  }
 
-    // Solo para Pasajero
-    ...(userRole === USER_ROLES.PASSENGER ? [
-      {
-        id: 'passenger-main',
-        title: 'Buscar Viaje',
-        icon: 'car-outline',
-        onPress: () => handleNavigation('PassengerMain'),
-        color: '#4CAF50'
-      }
-    ] : []),
+  // Solo para Admin
+  if (isAdmin) {
+    menuItems.push({ id: 'admin-dashboard', title: 'Panel Admin', icon: 'shield-checkmark-outline', onPress: () => handleNavigation('AdminDashboard'), color: '#9C27B0' });
+    menuItems.push({ id: 'admin-lines', title: 'Gestión de Líneas', icon: 'git-compare-outline', onPress: () => handleNavigation('AdminLines'), color: '#00796B' });
 
-    // Solo para Conductor
-    ...(userRole === USER_ROLES.DRIVER ? [
-      {
-        id: 'driver-main',
-        title: 'Panel Conductor',
-        icon: 'car-sport-outline',
-        onPress: () => handleNavigation('DriverMain'),
-        color: '#FF5722'
-      }
-    ] : []),
+    // Rutas dinámicas guardadas en Firestore (visibles solo para admin)
+    if (persistedRoutes && persistedRoutes.length > 0) {
+      persistedRoutes.forEach(r => {
+        const coords = Array.isArray(r.coordinates) && r.coordinates.length > 0 && Array.isArray(r.coordinates[0])
+          ? // Si ya está como pares, asumimos [lng,lat] y lo usamos tal cual
+            r.coordinates
+          : // Si está guardado como objetos {lng,lat}, convertir a [lng,lat]
+            (r.coordinates || []).map(c => [c.lng, c.lat]);
+        menuItems.push({
+          id: `route_${r.id}`,
+          title: r.name,
+          icon: 'bus-outline',
+          onPress: () => handleNavigation('AdminMap', { customRoute: { coordinates: coords, color: r.color, name: r.name } }),
+          color: r.color || '#607D8B'
+        });
+      });
+    }
+  }
 
-    // Logout si está autenticado
-    ...(user ? [
-      {
-        id: 'logout',
-        title: 'Cerrar Sesión',
-        icon: 'log-out-outline',
-        onPress: handleLogout,
-        color: '#F44336',
-        separator: true
-      }
-    ] : [])
-  ];
+  // Solo para Pasajero
+  if (userRole === USER_ROLES.PASSENGER) {
+    menuItems.push({ id: 'passenger-main', title: 'Buscar Viaje', icon: 'car-outline', onPress: () => handleNavigation('PassengerMain'), color: '#4CAF50' });
+  }
+
+  // Solo para Conductor
+  if (userRole === USER_ROLES.DRIVER) {
+    menuItems.push({ id: 'driver-main', title: 'Panel Conductor', icon: 'car-sport-outline', onPress: () => handleNavigation('DriverMain'), color: '#FF5722' });
+  }
+
+  // Logout si está autenticado
+  if (user) {
+    menuItems.push({ id: 'logout', title: 'Cerrar Sesión', icon: 'log-out-outline', onPress: handleLogout, color: '#F44336', separator: true });
+  }
 
   return (
     <SafeAreaView style={styles.container}>

@@ -6,6 +6,7 @@ import {
   doc, 
   getDocs, 
   getDoc, 
+  setDoc, // Agregamos setDoc para crear/actualizar documentos
   query, 
   where, 
   orderBy, 
@@ -158,14 +159,15 @@ export const TripService = {
 
 // Servicio para ubicaciones de conductores
 export const LocationService = {
-  // Actualizar ubicación del conductor
+  // Actualizar ubicación del conductor - usa setDoc para crear/actualizar
   updateDriverLocation: async (driverId, location) => {
     try {
-      await updateDoc(doc(db, 'driverLocations', driverId), {
+      // setDoc con merge permite crear el documento si no existe o actualizarlo si existe
+      await setDoc(doc(db, 'driverLocations', driverId), {
         ...location,
         timestamp: new Date(),
         isOnline: true
-      });
+      }, { merge: true });
       return { success: true };
     } catch (error) {
       console.error('Error updating location:', error);
@@ -189,13 +191,28 @@ export const LocationService = {
     });
   },
 
-  // Marcar conductor como offline
+  // Marcar conductor como offline - usa setDoc para asegurar que el documento existe
   setDriverOffline: async (driverId) => {
     try {
-      await updateDoc(doc(db, 'driverLocations', driverId), {
-        isOnline: false,
-        timestamp: new Date()
-      });
+      // Primero verificamos si el documento existe, si no lo creamos
+      const driverDoc = await getDoc(doc(db, 'driverLocations', driverId));
+      
+      if (driverDoc.exists()) {
+        // Si existe, actualizamos
+        await updateDoc(doc(db, 'driverLocations', driverId), {
+          isOnline: false,
+          timestamp: new Date()
+        });
+      } else {
+        // Si no existe, creamos el documento con estado offline
+        await setDoc(doc(db, 'driverLocations', driverId), {
+          isOnline: false,
+          timestamp: new Date(),
+          latitude: null,
+          longitude: null,
+          accuracy: null
+        });
+      }
       return { success: true };
     } catch (error) {
       console.error('Error setting driver offline:', error);

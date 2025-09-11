@@ -16,6 +16,8 @@ import DriverScreen from '../screens/DriverScreen';
 import AdminScreen from '../screens/AdminScreen';
 import AdminDashboardScreen from '../screens/AdminDashboardScreen';
 import AdminMapScreen from '../screens/AdminMapScreen';
+import EditMapScreen from '../screens/EditMapScreen';
+import AdminLinesScreen from '../screens/AdminLinesScreen';
 import LocationSearchScreen from '../screens/LocationSearchScreen';
 import UserApprovalScreen from '../screens/UserApprovalScreen';
 import PaymentScreen from '../screens/PaymentScreen';
@@ -198,6 +200,9 @@ const AppNavigator = () => {
             {isAdmin && (
               <>
                 <Drawer.Screen name="AdminDashboard" component={AdminDashboardScreen} />
+                <Drawer.Screen name="AdminLines" component={AdminLinesScreen} />
+                {/* Pantalla dedicada para edición de rutas desde AdminLines */}
+                <Drawer.Screen name="EditMap" component={EditMapScreen} options={{ drawerItemStyle: { display: 'none' } }} />
                 {/* LocationSearch (registrado en la sección compartida más abajo) */}
                 <Drawer.Screen 
                   name="UserApproval" 

@@ -211,16 +211,44 @@ const DriverScreen = () => {
                             attributions: '© OpenStreetMap contributors'
                         })
                     }),
-                    // Capa del conductor (verde)
-                    new ol.layer.Vector({ 
+                    // Capa del conductor (ícono de micro/trufi)
+                    new ol.layer.Vector({
                         source: window.driverSource,
-                        style: new ol.style.Style({
-                            image: new ol.style.Circle({
-                                radius: 12,
-                                fill: new ol.style.Fill({ color: '#4CAF50' }),
-                                stroke: new ol.style.Stroke({ color: '#ffffff', width: 3 })
-                            })
-                        })
+                        style: function(feature, resolution) {
+                            // Calcular el radio basado en el zoom (resolution inversa)
+                            const zoom = window.map.getView().getZoom();
+                            const baseRadius = 25;
+                            const minRadius = 15;
+                            const maxRadius = 35;
+                            
+                            // Radio dinámico: más grande cuando alejado, más pequeño cuando cercano
+                            let radius = baseRadius;
+                            if (zoom < 12) {
+                                radius = maxRadius; // Grande cuando alejado
+                            } else if (zoom > 16) {
+                                radius = minRadius; // Pequeño cuando cercano
+                            } else {
+                                // Interpolación lineal: grande a pequeño
+                                const zoomRange = 16 - 12;
+                                const radiusRange = minRadius - maxRadius;
+                                radius = maxRadius + ((zoom - 12) / zoomRange) * radiusRange;
+                            }
+                            
+                            return new ol.style.Style({
+                                image: new ol.style.Circle({
+                                    radius: radius,
+                                    fill: new ol.style.Fill({ color: '#4CAF50' }),
+                                    stroke: new ol.style.Stroke({ color: '#ffffff', width: Math.max(2, radius * 0.15) })
+                                }),
+                                text: new ol.style.Text({
+                                    text: '🚐 MICRO',
+                                    font: 'bold ' + Math.max(10, radius * 0.45) + 'px Arial',
+                                    fill: new ol.style.Fill({ color: '#ffffff' }),
+                                    stroke: new ol.style.Stroke({ color: '#000000', width: Math.max(1, radius * 0.08) }),
+                                    offsetY: -2
+                                })
+                            });
+                        }
                     }),
                     // Capa de solicitudes de viaje (azul)
                     new ol.layer.Vector({ 
@@ -486,12 +514,34 @@ const DriverScreen = () => {
     setTripRequests(mockRequests);
   };
 
-  const toggleOnlineStatus = () => {
+  const toggleOnlineStatus = async () => {
     if (!location) {
       Alert.alert('Error', 'Necesitas activar la ubicación primero');
       return;
     }
-    setIsOnline(!isOnline);
+    
+    const newOnlineStatus = !isOnline;
+    
+    try {
+      if (!newOnlineStatus && user) {
+        // Si se está desconectando, marcar como offline en Firestore
+        console.log('🔴 [CONDUCTOR] Desconectando...');
+        await FirestoreLocationService.setDriverOffline(user.uid);
+        console.log('✅ [CONDUCTOR] Marcado como offline');
+      }
+      
+      setIsOnline(newOnlineStatus);
+      
+      if (newOnlineStatus) {
+        console.log('🟢 [CONDUCTOR] Conectando...');
+        // Si se está conectando, inmediatamente actualizar ubicación
+        updateDriverLocation();
+      }
+      
+    } catch (error) {
+      console.error('❌ Error al cambiar estado online:', error);
+      Alert.alert('Error', 'No se pudo cambiar el estado. Intenta nuevamente.');
+    }
   };
 
   const acceptTrip = (trip) => {

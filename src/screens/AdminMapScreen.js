@@ -22,10 +22,12 @@ const AdminMapScreen = ({ navigation, route }) => {
   const [mapReady, setMapReady] = useState(false);
   const [currentRoute, setCurrentRoute] = useState(null);
   const [routeData, setRouteData] = useState(null); // Para manejar rutas origen-destino
+  const [pendingCustomRoute, setPendingCustomRoute] = useState(null); // Para guardar customRoute hasta que el mapa esté listo
   const webViewRef = useRef(null);
 
   // Obtener tipo de ruta de los parámetros
   const routeType = route?.params?.routeType || null;
+  const editMode = route?.params?.editMode || false;
 
   // ✅ Manejo de efectos
   useEffect(() => {
@@ -34,6 +36,12 @@ const AdminMapScreen = ({ navigation, route }) => {
     // Configurar ruta si se pasó como parámetro
     if (routeType) {
       setCurrentRoute(routeType);
+    }
+
+    // Si venimos en modo edición, activar una bandera (el HTML manejará clicks)
+    if (route?.params?.editMode) {
+      // forzar pequeño re-render si es necesario
+      console.log('✏️ Modo edición activado en AdminMap');
     }
   }, [routeType]);
 
@@ -439,7 +447,115 @@ const AdminMapScreen = ({ navigation, route }) => {
     if (currentRoute && mapReady) {
       showTransportRoute(currentRoute);
     }
+
+    // Si recibimos un customRoute desde otra pantalla, guardarlo y dejar que otro efecto lo muestre cuando el mapa esté listo
+    if (route?.params?.customRoute) {
+      const cr = route.params.customRoute;
+      // Asegurar formato de coordenadas: convertir {lat,lng} -> [lng,lat] si es necesario
+      let coords = cr.coordinates || [];
+      if (coords.length > 0 && coords[0] && typeof coords[0] === 'object' && !Array.isArray(coords[0])) {
+        try {
+          coords = coords.map(c => [c.lng, c.lat]);
+        } catch (e) { /* keep original if unexpected */ }
+      }
+      const normalized = { ...cr, coordinates: coords };
+      console.log('🧩 customRoute recibido (pendiente):', normalized.name || 'custom', 'points:', (normalized.coordinates || []).length);
+      setPendingCustomRoute(normalized);
+      // limpiar param para evitar re-procesos
+      navigation.setParams({ customRoute: null });
+    }
   }, [currentRoute, mapReady]);
+
+  // Procesar customRoute si llega en params (inmediato) — cubre caso cuando la pantalla ya está activa
+  useEffect(() => {
+    try {
+      const cr = route && route.params && route.params.customRoute ? route.params.customRoute : null;
+      if (!cr) return;
+
+      // Normalizar coords: aceptar [{lat,lng}, ...] o [[lng,lat], ...]
+      let coords = cr.coordinates || [];
+      if (coords.length > 0 && coords[0] && typeof coords[0] === 'object' && !Array.isArray(coords[0])) {
+        coords = coords.map(c => [c.lng, c.lat]);
+      }
+
+      const normalized = { ...cr, coordinates: coords };
+
+      if (mapReady && webViewRef.current) {
+        const coordsToSend = normalized.coordinates || [];
+        const script = `
+          if (window.clearTransportRoutes) window.clearTransportRoutes();
+          if (window.addTransportRoute) {
+            const coords = ${JSON.stringify(coordsToSend)};
+            window.addTransportRoute(coords, "${normalized.color || '#1976D2'}", "${(normalized.name||'Custom')}" );
+          }
+        `;
+        try {
+          webViewRef.current.postMessage(script);
+          console.log('✅ customRoute enviado directamente:', normalized.name || 'custom');
+        } catch (e) {
+          console.error('❌ Error enviando customRoute directamente', e);
+          setPendingCustomRoute(normalized);
+        }
+      } else {
+        console.log('LOG 🔧 customRoute recibido (guardado pendiente):', normalized.name || 'custom');
+        setPendingCustomRoute(normalized);
+      }
+
+      // limpiar param para evitar reenvíos
+      navigation.setParams({ customRoute: null });
+    } catch (e) {
+      console.warn('Error procesando route.params.customRoute', e);
+    }
+  }, [route && route.params && route.params.customRoute, mapReady]);
+
+  // Efecto que intenta enviar pendingCustomRoute al WebView hasta que mapReady
+  useEffect(() => {
+    if (!pendingCustomRoute) return;
+
+    let attempts = 0;
+    const maxAttempts = 20;
+    const trySend = () => {
+      attempts += 1;
+      const ready = !!webViewRef.current && mapReady;
+      console.log('⏳ Intentando enviar pendingCustomRoute', attempts, '/', maxAttempts, { ready });
+      if (ready) {
+        const cr = pendingCustomRoute;
+        // Normalizar coords por si vienen como objetos {lat,lng}
+        let coordsToSend = cr.coordinates || [];
+        if (coordsToSend.length > 0 && coordsToSend[0] && typeof coordsToSend[0] === 'object' && !Array.isArray(coordsToSend[0])) {
+          try { coordsToSend = coordsToSend.map(c => [c.lng, c.lat]); } catch (e) { /* keep original */ }
+        }
+        const script = `
+          if (window.clearTransportRoutes) window.clearTransportRoutes();
+          if (window.addTransportRoute) {
+            const coords = ${JSON.stringify(coordsToSend)};
+            window.addTransportRoute(coords, "${cr.color || '#1976D2'}", "${(cr.name||'Custom')}" );
+          }
+        `;
+        try {
+          webViewRef.current.postMessage(script);
+          console.log('✅ pendingCustomRoute enviado:', cr.name || 'custom');
+        } catch (e) {
+          console.error('❌ Error enviando pendingCustomRoute', e);
+        }
+        setPendingCustomRoute(null);
+        return;
+      }
+      if (attempts >= maxAttempts) {
+        console.warn('⚠️ No se pudo enviar pendingCustomRoute tras varios intentos');
+        setPendingCustomRoute(null);
+      }
+    };
+
+    // intentar inmediatamente y luego periódicamente si no está listo
+    trySend();
+    const interval = setInterval(() => {
+      if (!pendingCustomRoute) { clearInterval(interval); return; }
+      trySend();
+    }, 300);
+
+    return () => clearInterval(interval);
+  }, [pendingCustomRoute, mapReady]);
 
   // Centrar en la ubicación actual
   const centerOnLocation = () => {
@@ -575,6 +691,39 @@ const AdminMapScreen = ({ navigation, route }) => {
                     }
                 }
             }, 3000);
+
+      // Si React Native solicitó modo edición, habilitar captura de clicks y enviarlos
+      window.adminEditMode = ${editMode ? 'true' : 'false'};
+      // Lista de puntos seleccionados por admin en la sesión
+      window.adminSelectedPoints = window.adminSelectedPoints || [];
+
+      window.onMapClickForAdmin = function(e) {
+        try {
+          const lat = e.latlng.lat;
+          const lng = e.latlng.lng;
+          console.log('✏️ admin map click', lat, lng);
+
+          // Crear marcador numerado para dar feedback visual al admin
+          const index = window.adminSelectedPoints.length + 1;
+          const pinHtml = '<div style="background:#1976D2;color:#fff;padding:6px 8px;border-radius:12px;font-weight:700;font-size:12px;box-shadow:0 2px 6px rgba(0,0,0,0.3);">' + index + '</div>';
+          const pinIcon = L.divIcon({ className: 'admin-pin', html: pinHtml, iconSize: [30, 30], iconAnchor: [15, 15] });
+          const marker = L.marker([lat, lng], { icon: pinIcon }).addTo(window.map).bindPopup('<b>Punto ' + index + '</b><br>' + lat.toFixed(6) + ', ' + lng.toFixed(6));
+
+          // Guardar referencia localmente (para posible edición futura)
+          window.adminSelectedPoints.push({ lat, lng, marker });
+
+          // Enviar el punto y su índice a React Native
+          if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'adminMapPoint', latitude: lat, longitude: lng, index }));
+          }
+        } catch (err) { console.error('admin click error', err); }
+      };
+
+      // Activar listener si editMode true
+      if (window.adminEditMode) {
+        window.map.on('click', window.onMapClickForAdmin);
+        console.log('✏️ Listener de clicks para admin activo');
+      }
 
             // Funciones para React Native
             window.updateLocation = function(lat, lng, address) {
@@ -1070,6 +1219,34 @@ const AdminMapScreen = ({ navigation, route }) => {
           style={styles.map}
           onMessage={(event) => {
             const message = event.nativeEvent.data;
+            // Puede venir como texto simple o JSON stringificado
+            try {
+              const parsed = JSON.parse(message);
+              if (parsed && parsed.type === 'adminMapPoint') {
+                console.log('✏️ Punto admin recibido en RN:', parsed);
+                // Si se pasó returnTo en params, enviar como param para que la pantalla receptora lo lea
+                const returnTo = route?.params?.returnTo || null;
+                if (returnTo) {
+                  // Usar navigate para que la otra pantalla procese el param en focus
+                  navigation.navigate(returnTo, { adminMapPoint: { latitude: parsed.latitude, longitude: parsed.longitude } });
+                } else {
+                  // Si no hay pantalla objetivo, almacenar en params de este screen
+                  navigation.setParams({ adminMapPoint: { latitude: parsed.latitude, longitude: parsed.longitude } });
+                }
+                return;
+              }
+              if (parsed && parsed.type === 'routeDisplayed') {
+                console.log('webview routeDisplayed', parsed);
+                return;
+              }
+              if (parsed && parsed.type === 'detailedRouteDisplayed') {
+                console.log('webview detailedRouteDisplayed', parsed);
+                return;
+              }
+            } catch (e) {
+              // no JSON
+            }
+
             if (message === 'mapReady') {
               setMapReady(true);
               if (location) {

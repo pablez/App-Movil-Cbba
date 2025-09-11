@@ -9,7 +9,8 @@ const firebaseConfig = {
   apiKey: "AIzaSyDyvw6YdotzdYWwKhfWOTj99_PmJzDiJO8",
   authDomain: "transportapp-cochabamba.firebaseapp.com",
   projectId: "transportapp-cochabamba",
-  storageBucket: "transportapp-cochabamba.firebasestorage.app",
+  // Corregido a formato típico de bucket: <project-id>.appspot.com
+  storageBucket: "transportapp-cochabamba.appspot.com",
   messagingSenderId: "443534221039",
   appId: "1:443534221039:web:591b10b292727a5419851a",
   measurementId: "G-J35RR0PZQ6"
