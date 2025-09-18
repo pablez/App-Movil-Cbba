@@ -35,6 +35,12 @@ const PassengerScreen = () => {
   const webViewRef = useRef(null);
   const navigation = useNavigation();
   const appStateRef = useRef(AppState.currentState);
+  // Refs para evitar closures en useEffect y mantener estado actualizado sin recrear efectos
+  const mapReadyRef = useRef(false);
+  const locationRef = useRef(null);
+  const driversRef = useRef([]);
+  const driversDebounceRef = useRef(null);
+  const locationDebounceRef = useRef(null);
 
   // Altura de la barra de estado (Android) para ajustar el padding superior
   const statusBarHeight = Platform.OS === 'android' ? (StatusBar.currentHeight || 0) : 0;
@@ -44,69 +50,93 @@ const PassengerScreen = () => {
     const handleAppStateChange = (nextAppState) => {
       appStateRef.current = nextAppState;
       // Si la app vuelve al foreground, refrescar datos
-      if (nextAppState === 'active' && mapReady) {
+      if (nextAppState === 'active' && mapReadyRef.current) {
         // Pequeño delay para asegurar que el WebView esté listo
         setTimeout(() => {
-          if (location) {
-            updateLocationOnMap(location.latitude, location.longitude);
+          const loc = locationRef.current;
+          const drvs = driversRef.current;
+          if (loc && loc.latitude && loc.longitude) {
+            updateLocationOnMap(loc.latitude, loc.longitude);
           }
-          if (drivers.length > 0) {
-            updateDriversOnMap(drivers);
+          if (drvs && drvs.length > 0) {
+            updateDriversOnMap(drvs);
           }
         }, 1000);
       }
     };
 
+    // Registrar una sola vez el listener de AppState
     const subscription = AppState.addEventListener('change', handleAppStateChange);
     return () => subscription?.remove();
   }, [mapReady, location, drivers]);
 
   useEffect(() => {
-    getCurrentLocation();
+    // No solicitar ubicación automáticamente al iniciar sesión.
+    // La ubicación del pasajero se obtendrá cuando el usuario pulse el botón de localizar.
     loadUserProfile();
-    
-    // Suscribirse a conductores en tiempo real con debouncing
-    let driversTimeout = null;
+
+    // Suscribirse a conductores en tiempo real con debouncing estable (guardamos refs)
     const unsub = FirestoreLocationService.getNearbyDrivers((driversData) => {
-      // Solo actualizar si la app está activa
+      // Solo actualizar estado si la app está activa
       if (appStateRef.current !== 'active') return;
-      
-      setDrivers(driversData);
-      
-      // Debounce para evitar actualizaciones muy frecuentes
-      if (driversTimeout) clearTimeout(driversTimeout);
-      driversTimeout = setTimeout(() => {
-        if (mapReady && webViewRef.current && appStateRef.current === 'active') {
-          updateDriversOnMap(driversData);
+
+      // Actualizar refs y estado React
+      driversRef.current = driversData || [];
+      setDrivers(driversData || []);
+
+      // Debounce estable usando ref (evita recreaciones y closures)
+      if (driversDebounceRef.current) clearTimeout(driversDebounceRef.current);
+      driversDebounceRef.current = setTimeout(() => {
+        if (mapReadyRef.current && webViewRef.current && appStateRef.current === 'active') {
+          updateDriversOnMap(driversRef.current);
         }
-      }, 500); // Esperar 500ms antes de actualizar
+      }, 500);
     });
-    
-    return () => { 
-      if (unsub) unsub(); 
-      if (driversTimeout) clearTimeout(driversTimeout);
+
+    return () => {
+      if (unsub) unsub();
+      if (driversDebounceRef.current) clearTimeout(driversDebounceRef.current);
     };
   }, []); // Solo ejecutar una vez al montar
 
   // Actualizar conductores cuando el mapa esté listo (solo si hay cambios significativos)
+  // Cuando el mapa cambia a ready, sincronizamos desde las refs (evita closures)
   useEffect(() => {
-    if (mapReady && drivers.length > 0 && webViewRef.current) {
-      // Solo actualizar si realmente hay drivers nuevos
-      updateDriversOnMap(drivers);
+    if (mapReady) {
+      mapReadyRef.current = true;
+      if (driversRef.current && driversRef.current.length > 0 && webViewRef.current && appStateRef.current === 'active') {
+        updateDriversOnMap(driversRef.current);
+      }
+      // También sincronizar ubicación actual
+      const loc = locationRef.current;
+      if (loc && loc.latitude && loc.longitude) {
+        updateLocationOnMap(loc.latitude, loc.longitude);
+      }
+    } else {
+      mapReadyRef.current = false;
     }
-  }, [mapReady]); // Solo cuando el mapa esté listo, no en cada cambio de drivers
+  }, [mapReady]);
 
   // Actualizar ubicación en el mapa cuando cambie (con debouncing)
+  // Manejo de cambios de ubicación con debounce estable y usando refs
   useEffect(() => {
-    if (mapReady && location && webViewRef.current) {
-      // Debounce para ubicación también
-      const locationTimeout = setTimeout(() => {
-        updateLocationOnMap(location.latitude, location.longitude);
-      }, 200);
-      
-      return () => clearTimeout(locationTimeout);
-    }
-  }, [mapReady, location?.latitude, location?.longitude]); // Solo cuando coordenadas cambien realmente
+    // Mantener referencia siempre actualizada
+    locationRef.current = location;
+
+    if (!mapReadyRef.current || !location) return;
+
+    if (locationDebounceRef.current) clearTimeout(locationDebounceRef.current);
+    locationDebounceRef.current = setTimeout(() => {
+      const loc = locationRef.current;
+      if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number' && appStateRef.current === 'active') {
+        updateLocationOnMap(loc.latitude, loc.longitude);
+      }
+    }, 250);
+
+    return () => {
+      if (locationDebounceRef.current) clearTimeout(locationDebounceRef.current);
+    };
+  }, [location?.latitude, location?.longitude, mapReady]);
 
   useEffect(() => {
     // Calcular tarifa cuando tengamos el perfil del usuario
@@ -148,6 +178,13 @@ const PassengerScreen = () => {
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       });
+      // Mantener ref sincronizada
+      locationRef.current = {
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      };
 
       if (res.address && res.address.formatted) {
         console.log('📍 Dirección detectada:', res.address.formatted);
@@ -175,6 +212,12 @@ const PassengerScreen = () => {
           latitudeDelta: 0.01,
           longitudeDelta: 0.01,
         });
+        locationRef.current = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        };
         setPermissionDenied(false);
       } catch (err2) {
         console.error('Fallback expo-location también falló:', err2);
@@ -185,14 +228,12 @@ const PassengerScreen = () => {
 
   // Actualizar ubicación en el mapa web (optimizado)
   const updateLocationOnMap = (latitude, longitude) => {
-    if (!webViewRef.current || !mapReady) return;
+    if (!webViewRef.current || !mapReadyRef.current) return;
     
     try {
-      const message = JSON.stringify({
-        type: 'updateLocation',
-        latitude,
-        longitude
-      });
+      // Validar coordenadas antes de enviar
+      if (typeof latitude !== 'number' || typeof longitude !== 'number' || isNaN(latitude) || isNaN(longitude)) return;
+      const message = JSON.stringify({ type: 'updateLocation', latitude, longitude });
       webViewRef.current.postMessage(message);
     } catch (error) {
       console.warn('Error enviando ubicación al mapa:', error);
@@ -201,7 +242,7 @@ const PassengerScreen = () => {
 
   // Actualizar conductores en el mapa web (optimizado)
   const updateDriversOnMap = (driversData) => {
-    if (!webViewRef.current || !mapReady || !driversData) return;
+    if (!webViewRef.current || !mapReadyRef.current || !driversData) return;
     
     try {
       // Filtrar solo conductores válidos para reducir carga
@@ -213,7 +254,7 @@ const PassengerScreen = () => {
         !isNaN(driver.longitude)
       );
 
-      if (validDrivers.length === 0) return;
+  if (validDrivers.length === 0) return;
 
       const message = JSON.stringify({
         type: 'updateDrivers', 
@@ -230,6 +271,30 @@ const PassengerScreen = () => {
       webViewRef.current.postMessage(message);
     } catch (error) {
       console.warn('Error enviando conductores al mapa:', error);
+    }
+  };
+
+  // Manejar botón de localizar: centrar mapa en la ubicación del usuario cuando éste lo solicite
+  const handleLocatePress = async () => {
+    try {
+      if (!mapReadyRef.current) {
+        Alert.alert('Mapa no listo', 'Espera a que el mapa termine de cargar.');
+        return;
+      }
+
+      // Si no tenemos ubicación, solicitarla (getCurrentLocation actualizará locationRef)
+      if (!locationRef.current) {
+        await getCurrentLocation();
+      }
+
+      const loc = locationRef.current;
+      if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
+        updateLocationOnMap(loc.latitude, loc.longitude);
+      } else {
+        Alert.alert('Ubicación no disponible', 'No se pudo obtener tu ubicación.');
+      }
+    } catch (err) {
+      console.warn('Error al centrar ubicación:', err);
     }
   };
 
@@ -281,7 +346,32 @@ const PassengerScreen = () => {
                                 fill: new ol.style.Fill({ color: '#2196F3' }),
                                 stroke: new ol.style.Stroke({ color: '#ffffff', width: 3 })
                             })
-                        })
+                    // Limitar vista al departamento de Cochabamba
+                    // Bounding box aproximado [minLon, minLat, maxLon, maxLat]
+                    var cochabambaMinLon = -67.5;
+                    var cochabambaMinLat = -19.0;
+                    var cochabambaMaxLon = -64.0;
+                    var cochabambaMaxLat = -16.0;
+
+                    var minProj = ol.proj.fromLonLat([cochabambaMinLon, cochabambaMinLat]);
+                    var maxProj = ol.proj.fromLonLat([cochabambaMaxLon, cochabambaMaxLat]);
+                    var cochabambaExtent = [minProj[0], minProj[1], maxProj[0], maxProj[1]];
+
+                    var view = new ol.View({
+                      center: ol.proj.fromLonLat([-66.1568, -17.3895]), // centro aproximado
+                      zoom: 9,
+                      minZoom: 7,
+                      maxZoom: 17,
+                      extent: cochabambaExtent,
+                      constrainOnlyCenter: true
+                    });
+
+                    view.fit(cochabambaExtent, { padding: [50, 50, 50, 50] });
+
+                    view.setConstrainResolution(true);
+
+                    // Usar la vista limitada
+                    window.map.setView(view);
                     }),
                     // Capa de conductores
                     new ol.layer.Vector({ 
@@ -433,14 +523,13 @@ const PassengerScreen = () => {
         {/* logout button removed */}
       </View>
 
-      {location ? (
-        <View style={styles.mapContainer}>
-          <WebView
-            ref={webViewRef}
-            source={{ html: generateMapHTML() }}
-            style={[styles.map, { zIndex: 0 }]}
-            androidLayerType="software"
-            onMessage={(event) => {
+          <View style={styles.mapContainer}>
+              <WebView
+                ref={webViewRef}
+                source={{ html: generateMapHTML() }}
+                style={[styles.map, { zIndex: 0 }]}
+                androidLayerType="software"
+                onMessage={(event) => {
               try {
                 const message = event.nativeEvent.data;
                 console.log('Mensaje del mapa:', message);
@@ -488,14 +577,8 @@ const PassengerScreen = () => {
               const { nativeEvent } = syntheticEvent;
               console.error('WebView HTTP error:', nativeEvent);
             }}
-          />
+            />
         </View>
-      ) : (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#2196F3" />
-          <Text>Obteniendo ubicación...</Text>
-        </View>
-      )}
 
       {/* Botón flotante para abrir el Drawer (arriba a la izquierda) */}
       <TouchableOpacity
@@ -519,6 +602,15 @@ const PassengerScreen = () => {
         activeOpacity={0.8}
       >
         <Ionicons name="navigate" size={28} color="#fff" />
+      </TouchableOpacity>
+
+      {/* Botón flotante para centrar la ubicación (naranja) */}
+      <TouchableOpacity
+        style={[styles.fabLocate, { top: 110 + statusBarHeight, right: 20 }]}
+        onPress={handleLocatePress}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="locate" size={26} color="#ffffff" />
       </TouchableOpacity>
 
       {permissionDenied && (
@@ -656,6 +748,26 @@ const styles = StyleSheet.create({
     },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
+    zIndex: 1000,
+  },
+
+  // Estilo para botón localizar (naranja)
+  fabLocate: {
+    position: 'absolute',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#FF8A00',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
     zIndex: 1000,
   },
   loadingContainer: {
