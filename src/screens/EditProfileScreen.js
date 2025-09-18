@@ -206,14 +206,17 @@ const EditProfileScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={navigateToRootForRole}
-        >
-          <Ionicons name="arrow-back" size={22} color="#1976D2" />
-        </TouchableOpacity>
+      {/* Floating pill to open drawer (75% width) */}
+      <TouchableOpacity
+        style={[styles.floatingPill, { top: STATUSBAR_HEIGHT + 8 }]}
+        onPress={() => { try { navigation.openDrawer(); } catch (e) { console.warn('openDrawer no disponible', e); } }}
+        activeOpacity={0.9}
+      >
+        <Ionicons name="menu" size={20} color="#fff" style={{ marginRight: 10 }} />
+        <Text style={styles.floatingPillText}>Menú</Text>
+      </TouchableOpacity>
 
+      <View style={styles.header}>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Editar perfil</Text>
           <View style={styles.avatarRow}>
@@ -241,7 +244,7 @@ const EditProfileScreen = ({ navigation }) => {
             </View>
           </View>
         </View>
-      </View>
+  </View>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
   <View style={styles.formCard}>
         <Text style={styles.label}>Correo</Text>
@@ -284,9 +287,25 @@ const EditProfileScreen = ({ navigation }) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f0f4f8', paddingTop: STATUSBAR_HEIGHT + 6 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 14, paddingBottom: 10, backgroundColor: '#fff' },
-  backButton: { padding: 6, marginRight: 8 },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 16, paddingBottom: 12, backgroundColor: '#fff', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#eee', elevation: 2 },
   headerTitle: { fontSize: 18, fontWeight: '700', color: '#222' },
+  floatingPill: {
+    position: 'absolute',
+    left: '3%',
+    right: '75%',
+    height: 44,
+    borderRadius: 28,
+    backgroundColor: '#1976D2',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 120,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  floatingPillText: { color: '#fff', fontWeight: '700', fontSize: 15 },
   scroll: { padding: 16 },
   formCard: { backgroundColor: '#fff', borderRadius: 10, padding: 16, elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6 },
   label: { fontSize: 14, color: '#555', marginBottom: 6 },

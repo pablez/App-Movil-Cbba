@@ -23,6 +23,7 @@ import UserApprovalScreen from '../screens/UserApprovalScreen';
 import PaymentScreen from '../screens/PaymentScreen';
 import SimpleTestScreen from '../screens/SimpleTestScreen';
 import EditProfileScreen from '../screens/EditProfileScreen';
+import RouteSearchScreen from '../screens/RouteSearchScreen';
 
 const Drawer = createDrawerNavigator();
 
@@ -224,6 +225,13 @@ const AppNavigator = () => {
               <>
                 {/* PassengerMain ahora apunta a PassengerScreen (map/UX para pasajeros) */}
                 <Drawer.Screen name="PassengerMain" component={PassengerScreen} />
+                <Drawer.Screen 
+                  name="RouteSearch" 
+                  component={RouteSearchScreen}
+                  options={{ 
+                    drawerItemStyle: { display: 'none' } // Ocultar del drawer
+                  }}
+                />
                 <Drawer.Screen 
                   name="Payment" 
                   component={PaymentScreen}

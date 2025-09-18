@@ -117,6 +117,9 @@ const DrawerContent = ({ navigation, state }) => {
 
   // Solo para Pasajero
   if (userRole === USER_ROLES.PASSENGER) {
+    // Nuevo acceso directo para buscar rutas
+    menuItems.push({ id: 'buscar-ruta', title: 'Buscar Ruta', icon: 'navigate-outline', onPress: () => handleNavigation('RouteSearch'), color: '#2E86AB' });
+    // Entrada existente para la pantalla principal de pasajero
     menuItems.push({ id: 'passenger-main', title: 'Buscar Viaje', icon: 'car-outline', onPress: () => handleNavigation('PassengerMain'), color: '#4CAF50' });
   }
 

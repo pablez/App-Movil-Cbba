@@ -9,7 +9,8 @@ import {
   Linking,
   Platform,
   StatusBar,
-  ActivityIndicator
+  ActivityIndicator,
+  AppState
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 // Usamos LocationService (OpenRouteService wrapper) para obtener ubicación y dirección
@@ -17,6 +18,7 @@ import LocationService from '../services/LocationService';
 import { doc, getDoc } from 'firebase/firestore';
 import { LocationService as FirestoreLocationService } from '../services/firestoreService';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { PASSENGER_TYPES } from '../utils/constants';
 import { db } from '../config/firebase';
@@ -29,39 +31,82 @@ const PassengerScreen = () => {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [fare, setFare] = useState(2.5);
   const [mapReady, setMapReady] = useState(false);
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const webViewRef = useRef(null);
+  const navigation = useNavigation();
+  const appStateRef = useRef(AppState.currentState);
 
   // Altura de la barra de estado (Android) para ajustar el padding superior
   const statusBarHeight = Platform.OS === 'android' ? (StatusBar.currentHeight || 0) : 0;
 
+  // Manejar cambios en el estado de la app (background/foreground)
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState) => {
+      appStateRef.current = nextAppState;
+      // Si la app vuelve al foreground, refrescar datos
+      if (nextAppState === 'active' && mapReady) {
+        // Pequeño delay para asegurar que el WebView esté listo
+        setTimeout(() => {
+          if (location) {
+            updateLocationOnMap(location.latitude, location.longitude);
+          }
+          if (drivers.length > 0) {
+            updateDriversOnMap(drivers);
+          }
+        }, 1000);
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription?.remove();
+  }, [mapReady, location, drivers]);
+
   useEffect(() => {
     getCurrentLocation();
     loadUserProfile();
-    // Suscribirse a conductores en tiempo real
+    
+    // Suscribirse a conductores en tiempo real con debouncing
+    let driversTimeout = null;
     const unsub = FirestoreLocationService.getNearbyDrivers((driversData) => {
+      // Solo actualizar si la app está activa
+      if (appStateRef.current !== 'active') return;
+      
       setDrivers(driversData);
-      // Enviar conductores al mapa web cuando estén listos
-      if (mapReady && webViewRef.current) {
-        updateDriversOnMap(driversData);
-      }
+      
+      // Debounce para evitar actualizaciones muy frecuentes
+      if (driversTimeout) clearTimeout(driversTimeout);
+      driversTimeout = setTimeout(() => {
+        if (mapReady && webViewRef.current && appStateRef.current === 'active') {
+          updateDriversOnMap(driversData);
+        }
+      }, 500); // Esperar 500ms antes de actualizar
     });
-    return () => { if (unsub) unsub(); };
-  }, []);
+    
+    return () => { 
+      if (unsub) unsub(); 
+      if (driversTimeout) clearTimeout(driversTimeout);
+    };
+  }, []); // Solo ejecutar una vez al montar
 
-  // Actualizar conductores cuando el mapa esté listo
+  // Actualizar conductores cuando el mapa esté listo (solo si hay cambios significativos)
   useEffect(() => {
-    if (mapReady && drivers.length > 0) {
+    if (mapReady && drivers.length > 0 && webViewRef.current) {
+      // Solo actualizar si realmente hay drivers nuevos
       updateDriversOnMap(drivers);
     }
-  }, [mapReady, drivers]);
+  }, [mapReady]); // Solo cuando el mapa esté listo, no en cada cambio de drivers
 
-  // Actualizar ubicación en el mapa cuando cambie
+  // Actualizar ubicación en el mapa cuando cambie (con debouncing)
   useEffect(() => {
     if (mapReady && location && webViewRef.current) {
-      updateLocationOnMap(location.latitude, location.longitude);
+      // Debounce para ubicación también
+      const locationTimeout = setTimeout(() => {
+        updateLocationOnMap(location.latitude, location.longitude);
+      }, 200);
+      
+      return () => clearTimeout(locationTimeout);
     }
-  }, [mapReady, location]);
+  }, [mapReady, location?.latitude, location?.longitude]); // Solo cuando coordenadas cambien realmente
 
   useEffect(() => {
     // Calcular tarifa cuando tengamos el perfil del usuario
@@ -138,24 +183,41 @@ const PassengerScreen = () => {
     }
   };
 
-  // Actualizar ubicación en el mapa web
+  // Actualizar ubicación en el mapa web (optimizado)
   const updateLocationOnMap = (latitude, longitude) => {
-    if (webViewRef.current) {
+    if (!webViewRef.current || !mapReady) return;
+    
+    try {
       const message = JSON.stringify({
         type: 'updateLocation',
         latitude,
         longitude
       });
       webViewRef.current.postMessage(message);
+    } catch (error) {
+      console.warn('Error enviando ubicación al mapa:', error);
     }
   };
 
-  // Actualizar conductores en el mapa web  
+  // Actualizar conductores en el mapa web (optimizado)
   const updateDriversOnMap = (driversData) => {
-    if (webViewRef.current) {
+    if (!webViewRef.current || !mapReady || !driversData) return;
+    
+    try {
+      // Filtrar solo conductores válidos para reducir carga
+      const validDrivers = driversData.filter(driver => 
+        driver && 
+        typeof driver.latitude === 'number' && 
+        typeof driver.longitude === 'number' &&
+        !isNaN(driver.latitude) && 
+        !isNaN(driver.longitude)
+      );
+
+      if (validDrivers.length === 0) return;
+
       const message = JSON.stringify({
         type: 'updateDrivers', 
-        drivers: driversData.map(driver => ({
+        drivers: validDrivers.map(driver => ({
           id: driver.id,
           name: driver.name || 'Conductor',
           latitude: driver.latitude,
@@ -166,10 +228,12 @@ const PassengerScreen = () => {
         }))
       });
       webViewRef.current.postMessage(message);
+    } catch (error) {
+      console.warn('Error enviando conductores al mapa:', error);
     }
   };
 
-  // Generar HTML del mapa con OpenRouteService - Versión simplificada y funcional
+  // Generar HTML del mapa con OpenRouteService - Versión simplificada para pasajeros
   const generateMapHTML = () => {
     return `
     <!DOCTYPE html>
@@ -244,7 +308,7 @@ const PassengerScreen = () => {
                 if (window.ReactNativeWebView) {
                     window.ReactNativeWebView.postMessage('mapReady');
                 }
-            }, 2000); // Aumentamos el tiempo para asegurar que los tiles se carguen
+            }, 2000);
 
             // Detectar errores de carga de tiles
             window.map.on('loadstart', function() {
@@ -307,7 +371,6 @@ const PassengerScreen = () => {
                         updateDrivers(msg.drivers || []);
                     }
                 } catch (err) {
-                    // No es JSON válido, ignorar
                     console.log('Mensaje no JSON:', data);
                 }
             }
@@ -320,32 +383,6 @@ const PassengerScreen = () => {
         </script>
     </body>
     </html>`;
-  };
-
-  const loadNearbyDrivers = () => {
-    // Simulación de conductores cercanos
-    // En una aplicación real, esto vendría de Firebase Firestore
-    const mockDrivers = [
-      {
-        id: '1',
-        name: 'Juan Pérez',
-        vehicle: 'Toyota Hiace',
-        plate: 'CBB-1234',
-        latitude: -17.3895 + (Math.random() - 0.5) * 0.01,
-        longitude: -66.1568 + (Math.random() - 0.5) * 0.01,
-        available: true
-      },
-      {
-        id: '2',
-        name: 'María García',
-        vehicle: 'Ford Transit',
-        plate: 'CBB-5678',
-        latitude: -17.3895 + (Math.random() - 0.5) * 0.01,
-        longitude: -66.1568 + (Math.random() - 0.5) * 0.01,
-        available: true
-      }
-    ];
-    setDrivers(mockDrivers);
   };
 
   const requestTrip = () => {
@@ -379,7 +416,7 @@ const PassengerScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-  <View style={[styles.header, { paddingTop: 15 + statusBarHeight }] }>
+      <View style={[styles.header, { paddingTop: 15 + statusBarHeight }] }>
         <View>
           <Text style={styles.welcome}>
             Hola, {userProfile?.firstName || user?.displayName || 'Pasajero'}
@@ -393,9 +430,7 @@ const PassengerScreen = () => {
             <Text style={styles.addressText}>📍 {address}</Text>
           ) : null}
         </View>
-        <TouchableOpacity onPress={logout} style={styles.logoutButton}>
-          <Text style={styles.logoutText}>Salir</Text>
-        </TouchableOpacity>
+        {/* logout button removed */}
       </View>
 
       {location ? (
@@ -403,7 +438,8 @@ const PassengerScreen = () => {
           <WebView
             ref={webViewRef}
             source={{ html: generateMapHTML() }}
-            style={styles.map}
+            style={[styles.map, { zIndex: 0 }]}
+            androidLayerType="software"
             onMessage={(event) => {
               try {
                 const message = event.nativeEvent.data;
@@ -416,14 +452,11 @@ const PassengerScreen = () => {
                   return;
                 }
                 
-                // Intentar parsear como JSON solo si no es el mensaje 'mapReady'
+                // Procesar otros mensajes si es necesario
                 try {
                   const data = JSON.parse(message);
-                  if (data.type === 'mapClick') {
-                    console.log('Click en mapa:', data.latitude, data.longitude);
-                  }
+                  console.log('Mensaje JSON del mapa:', data);
                 } catch (jsonError) {
-                  // Ignorar mensajes que no sean JSON válidos
                   console.log('Mensaje no JSON del mapa:', message);
                 }
               } catch (error) {
@@ -464,6 +497,30 @@ const PassengerScreen = () => {
         </View>
       )}
 
+      {/* Botón flotante para abrir el Drawer (arriba a la izquierda) */}
+      <TouchableOpacity
+        style={[styles.fab, { top: 10 + statusBarHeight, left: 10 }]}
+        onPress={() => {
+          try {
+            navigation.openDrawer();
+          } catch (e) {
+            console.warn('openDrawer no disponible:', e);
+          }
+        }}
+        activeOpacity={0.8}
+      >
+        <Ionicons name="menu" size={28} color="#fff" />
+      </TouchableOpacity>
+
+      {/* Botón flotante para búsqueda de rutas (arriba a la derecha) */}
+      <TouchableOpacity
+        style={[styles.fab, { top: 10 + statusBarHeight, right: 10 }]}
+        onPress={() => navigation.navigate('RouteSearch')}
+        activeOpacity={0.8}
+      >
+        <Ionicons name="navigate" size={28} color="#fff" />
+      </TouchableOpacity>
+
       {permissionDenied && (
         <View style={styles.permissionBanner}>
           <Text style={styles.permissionText}>Permiso de ubicación denegado. Activa GPS en ajustes.</Text>
@@ -501,6 +558,15 @@ const PassengerScreen = () => {
         >
           <Text style={styles.requestButtonText}>Solicitar Viaje</Text>
         </TouchableOpacity>
+
+        {/* Botón para planificar ruta */}
+        <TouchableOpacity 
+          style={styles.routeButton} 
+          onPress={() => navigation.navigate('RouteSearch')}
+        >
+          <Ionicons name="map" size={20} color="#2E86AB" />
+          <Text style={styles.routeButtonText}>Planificar Ruta</Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -513,29 +579,33 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     alignItems: 'center',
     paddingTop: 15,
     paddingBottom: 12,
     paddingHorizontal: 15,
     backgroundColor: '#2E86AB',
+    position: 'relative',
   },
   welcome: {
     color: '#ffffff',
     fontSize: 18,
     fontWeight: 'bold',
+    textAlign: 'center',
   },
   userRole: {
     color: '#ffffff',
     fontSize: 14,
     opacity: 0.9,
     marginTop: 2,
+    textAlign: 'center',
   },
   addressText: {
     color: '#ffffff',
     fontSize: 12,
     opacity: 0.9,
     marginTop: 2,
+    textAlign: 'center',
   },
   permissionBanner: {
     backgroundColor: '#ffeb3b',
@@ -561,22 +631,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  logoutButton: {
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 5,
-  },
-  logoutText: {
-    color: '#2E86AB',
-    fontWeight: 'bold',
-  },
+  // logout styles removed
   map: {
     flex: 1,
   },
   mapContainer: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+    position: 'relative',
+  },
+  fab: {
+    position: 'absolute',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#2E86AB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    zIndex: 1000,
   },
   loadingContainer: {
     flex: 1,
@@ -590,10 +670,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   bottomPanel: {
-  backgroundColor: '#ffffff',
-  paddingTop: 20,
-  paddingHorizontal: 20,
-  paddingBottom: 20 + (Platform.OS === 'ios' ? 34 : 12),
+    backgroundColor: '#ffffff',
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 20 + (Platform.OS === 'ios' ? 34 : 12),
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     shadowColor: '#000',
@@ -638,11 +718,28 @@ const styles = StyleSheet.create({
     padding: 15,
     borderRadius: 10,
     alignItems: 'center',
+    marginBottom: 10,
   },
   requestButtonText: {
     color: '#ffffff',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  routeButton: {
+    flexDirection: 'row',
+    backgroundColor: '#f8f9fa',
+    padding: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#2E86AB',
+  },
+  routeButtonText: {
+    color: '#2E86AB',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginLeft: 8,
   },
 });
 
