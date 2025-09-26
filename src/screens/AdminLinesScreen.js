@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Alert, Platform, StatusBar, Modal, KeyboardAvoidingView, ScrollView } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import Slider from '@react-native-community/slider';
 import { useIsFocused } from '@react-navigation/native';
 import { ROUTE_150_DATA, ROUTE_230_DATA, ROUTE_INFO } from '../data/routes';
 import { db, auth } from '../config/firebase';
-import { collection, addDoc, onSnapshot, serverTimestamp, query, orderBy, deleteDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, serverTimestamp, query, orderBy, deleteDoc, doc, getDoc, updateDoc, getDocs } from 'firebase/firestore';
 
 const extractCoordinatesFromGeo = (geo) => {
   try {
@@ -15,6 +17,8 @@ const extractCoordinatesFromGeo = (geo) => {
 
 const AdminLinesScreen = ({ navigation, route }) => {
   const isFocused = useIsFocused();
+  // Opciones rápidas de color para las rutas
+  const COLOR_OPTIONS = ['#1976D2', '#FF5722', '#9C27B0', '#4CAF50', '#FFC107', '#E91E63', '#607D8B', '#00BCD4'];
   // Rutas persistidas en Firestore
   const [persistedRoutes, setPersistedRoutes] = useState([]);
 
@@ -40,6 +44,27 @@ const AdminLinesScreen = ({ navigation, route }) => {
   const [color, setColor] = useState('#FF5722');
   const [points, setPoints] = useState([]); // puntos como {latitude, longitude}
   const [editingRouteId, setEditingRouteId] = useState(null);
+  // Modal para pedir metadata del punto seleccionado
+  const [showPointModal, setShowPointModal] = useState(false);
+  const [pendingPoint, setPendingPoint] = useState(null);
+  const [pointStreet, setPointStreet] = useState('');
+  const [pointName, setPointName] = useState('');
+  const [editingPointIndex, setEditingPointIndex] = useState(null);
+  const [showColorModal, setShowColorModal] = useState(false);
+  const [customR, setCustomR] = useState('255');
+  const [customG, setCustomG] = useState('87');
+  const [customB, setCustomB] = useState('34');
+  // Helpers para paleta
+  const clampByte = (v) => Math.max(0, Math.min(255, Number(v) || 0));
+  const incColor = (which, delta) => {
+    if (which === 'r') setCustomR(String(clampByte(Number(customR || 0) + delta)));
+    if (which === 'g') setCustomG(String(clampByte(Number(customG || 0) + delta)));
+    if (which === 'b') setCustomB(String(clampByte(Number(customB || 0) + delta)));
+  };
+  const previewR = clampByte(customR);
+  const previewG = clampByte(customG);
+  const previewB = clampByte(customB);
+  const previewHex = `#${((1<<24) + (previewR<<16) + (previewG<<8) + previewB).toString(16).slice(1).toUpperCase()}`;
 
   // Recibir puntos seleccionados desde AdminMap (vía navigation params)
   useEffect(() => {
@@ -47,8 +72,12 @@ const AdminLinesScreen = ({ navigation, route }) => {
     if (route?.params?.adminMapPoint) {
       const p = route.params.adminMapPoint;
       if (p && p.latitude && p.longitude) {
-        setPoints(prev => [...prev, { latitude: p.latitude, longitude: p.longitude }]);
-        Alert.alert('Punto agregado', `Lat: ${p.latitude.toFixed(6)}, Lng: ${p.longitude.toFixed(6)}`);
+        // Abrir modal para pedir nombre de calle/avenida y nombre del punto
+          setPendingPoint(p);
+          setPointStreet('');
+          setPointName('');
+          setEditingPointIndex(null); // nuevo punto, no edición de lista
+          setShowPointModal(true);
       }
       // Limpiar el param para no re-procesar
       navigation.setParams({ adminMapPoint: null });
@@ -84,6 +113,48 @@ const AdminLinesScreen = ({ navigation, route }) => {
   const startMapSelection = () => {
     // Navegar al mapa en modo edición. AdminMap enviará puntos seleccionados de vuelta.
     navigation.navigate('AdminMap', { editMode: true, returnTo: 'AdminLines' });
+  };
+
+  const savePendingPoint = () => {
+    if (!pendingPoint) return setShowPointModal(false);
+    const p = { latitude: pendingPoint.latitude, longitude: pendingPoint.longitude, street: (pointStreet || '').trim(), name: (pointName || '').trim() };
+    if (editingPointIndex !== null && editingPointIndex >= 0) {
+      // actualizar punto existente
+      setPoints(prev => prev.map((pt, i) => (i === editingPointIndex ? p : pt)));
+      Alert.alert('Punto actualizado', `Lat: ${p.latitude.toFixed(6)}, Lng: ${p.longitude.toFixed(6)}\n${p.street ? 'Calle: ' + p.street : ''}${p.name ? '\nNombre: ' + p.name : ''}`);
+    } else {
+      // nuevo punto
+      setPoints(prev => [...prev, p]);
+      Alert.alert('Punto agregado', `Lat: ${p.latitude.toFixed(6)}, Lng: ${p.longitude.toFixed(6)}\n${p.street ? 'Calle: ' + p.street : ''}${p.name ? '\nNombre: ' + p.name : ''}`);
+    }
+    setShowPointModal(false);
+    setPendingPoint(null);
+    setEditingPointIndex(null);
+  };
+
+  const cancelPendingPoint = () => {
+    setShowPointModal(false);
+    setPendingPoint(null);
+    setEditingPointIndex(null);
+  };
+
+  const openEditPoint = (index) => {
+    const pt = points[index];
+    if (!pt) return;
+    setPendingPoint({ latitude: pt.latitude, longitude: pt.longitude });
+    setPointStreet(pt.street || '');
+    setPointName(pt.name || '');
+    setEditingPointIndex(index);
+    setShowPointModal(true);
+  };
+
+  const openPointOnMap = () => {
+    if (!pendingPoint) return;
+    // Enviar como customRoute para que AdminMap muestre/centre el punto
+    const coordsPairs = [[pendingPoint.longitude, pendingPoint.latitude]];
+    setShowPointModal(false);
+    // Abrir en la pantalla de edición (EditMap) para ver/centrear el punto
+    navigation.navigate('EditMap', { customRoute: { coordinates: coordsPairs, color: color || '#FF5722', name: pointName || 'Punto' }, returnTo: 'AdminLines' });
   };
 
   const populateDefaultRoutes = async () => {
@@ -137,7 +208,8 @@ const AdminLinesScreen = ({ navigation, route }) => {
               color: r.color || '#607D8B',
               coordinates: coords,
               createdBy: userId,
-              createdAt: serverTimestamp()
+              createdAt: serverTimestamp(),
+              public: true // Marcar rutas por defecto como públicas
             };
             await addDoc(collection(db, 'routes'), payload);
             added += 1;
@@ -150,6 +222,52 @@ const AdminLinesScreen = ({ navigation, route }) => {
         }
       } }
     ]);
+  };
+
+  const markAllRoutesAsPublic = async () => {
+    Alert.alert(
+      'Marcar rutas como públicas',
+      '¿Deseas marcar TODAS las rutas existentes como públicas? Esto añadirá el campo "public: true" a todas las rutas que no lo tengan.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Marcar todas', onPress: async () => {
+          try {
+            const userId = auth && auth.currentUser ? auth.currentUser.uid : null;
+            if (!userId) {
+              Alert.alert('Error', 'No hay usuario autenticado en Firebase.');
+              return;
+            }
+
+            // Obtener todas las rutas
+            const q = query(collection(db, 'routes'));
+            const snap = await getDocs(q);
+            const allRoutes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+            let updated = 0;
+            
+            for (const route of allRoutes) {
+              // Solo actualizar si no tiene el campo 'public' o si es false
+              if (!route.hasOwnProperty('public') || route.public !== true) {
+                await updateDoc(doc(db, 'routes', route.id), {
+                  public: true,
+                  updatedBy: userId,
+                  updatedAt: serverTimestamp()
+                });
+                updated++;
+              }
+            }
+
+            Alert.alert(
+              'Actualización completada',
+              `${updated} rutas marcadas como públicas de ${allRoutes.length} rutas totales.`
+            );
+          } catch (err) {
+            console.error('Error marcando rutas como públicas:', err);
+            Alert.alert('Error', 'No se pudieron marcar las rutas como públicas: ' + (err.message || err.toString()));
+          }
+        }}
+      ]
+    );
   };
 
   const saveLine = async () => {
@@ -168,7 +286,8 @@ const AdminLinesScreen = ({ navigation, route }) => {
       const payloadBase = {
         name,
         color,
-        coordinates: coordsObjects
+        coordinates: coordsObjects,
+        public: true // Marcar automáticamente nuevas rutas como públicas
       };
 
       if (editingRouteId) {
@@ -268,19 +387,65 @@ const AdminLinesScreen = ({ navigation, route }) => {
     </View>
   );
 
+  // Calcular offset superior para evitar solapamiento con la barra de notificación / notch
+  const topOffset = Platform.OS === 'android' ? (StatusBar.currentHeight ? StatusBar.currentHeight + 8 : 20) : 44;
+
+  const containerPaddingTop = Math.max(12, topOffset + 8);
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Administrar Líneas</Text>
+    <View style={[styles.container, { paddingTop: containerPaddingTop }]}>
+      {/* Botón flotante superior izquierdo para abrir el drawer */}
+      <TouchableOpacity
+        style={[styles.floatingButton, { top: topOffset }]}
+        onPress={() => navigation.openDrawer && navigation.openDrawer()}
+        accessibilityLabel="Abrir menú"
+        accessibilityHint="Abre el drawer de navegación"
+        activeOpacity={0.8}
+      >
+        <Ionicons name="menu" size={25} color="#fff" />
+      </TouchableOpacity>
+      <View style={styles.headerRow}>
+        <View style={styles.headerCenter}>
+          <Ionicons name="bus" size={28} color="#1976D2" />
+          <View style={{ marginLeft: 12, alignItems: 'center' }}>
+            <Text style={styles.headerTitle}>Administrar Líneas</Text>
+            <Text style={styles.headerSubtitle}>Crea, edita y muestra las rutas del sistema</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Modal para pedir metadata del punto seleccionado en el mapa */}
+      <Modal visible={showPointModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>Agregar punto</Text>
+            <Text style={styles.modalLabel}>Calle o Avenida</Text>
+            <TextInput value={pointStreet} onChangeText={setPointStreet} placeholder="Ej: Av. Bolivia" style={styles.input} />
+            <Text style={styles.modalLabel}>Nombre del punto</Text>
+            <TextInput value={pointName} onChangeText={setPointName} placeholder="Ej: Parada Central" style={styles.input} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, gap: 8 }}>
+              <TouchableOpacity style={[styles.saveButton, { backgroundColor: '#BDBDBD', flex: 1 }]} onPress={cancelPendingPoint}><Text style={styles.saveButtonText}>Cancelar</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.saveButton, { backgroundColor: '#2196F3', flex: 1 }]} onPress={openPointOnMap}><Text style={styles.saveButtonText}>Ver en mapa</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.saveButton, { flex: 1 }]} onPress={savePendingPoint}><Text style={styles.saveButtonText}>Guardar Punto</Text></TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
 
       {!editing ? (
-        <View style={{ paddingHorizontal: 12 }}>
+        <View style={{ paddingHorizontal: 12, marginTop: 8 }}>
           <TouchableOpacity style={styles.createButton} onPress={() => setEditing(true)}>
             <Text style={styles.createButtonText}>+ Crear Línea</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.createButton, { backgroundColor: '#00796B', marginTop: 8 }]} onPress={populateDefaultRoutes}>
-            <Text style={styles.createButtonText}>+ Cargar rutas por defecto</Text>
-          </TouchableOpacity>
+          
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+            <TouchableOpacity style={[styles.utilityButton, { backgroundColor: '#FF9800' }]} onPress={populateDefaultRoutes}>
+              <Text style={styles.utilityButtonText}>Cargar rutas por defecto</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.utilityButton, { backgroundColor: '#4CAF50' }]} onPress={markAllRoutesAsPublic}>
+              <Text style={styles.utilityButtonText}>Marcar todas como públicas</Text>
+            </TouchableOpacity>
+          </View>
 
           <FlatList
             data={[...persistedRoutes, ...builtinLines]}
@@ -290,29 +455,139 @@ const AdminLinesScreen = ({ navigation, route }) => {
           />
         </View>
       ) : (
-        <View style={styles.form}>
-          <TextInput placeholder="Nombre de la línea" style={styles.input} value={name} onChangeText={setName} />
-          <TextInput placeholder="Color (hex)" style={styles.input} value={color} onChangeText={setColor} />
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <ScrollView contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled">
+            <View style={styles.form}>
+              <TextInput placeholder="Nombre de la línea" style={styles.input} value={name} onChangeText={setName} />
+              <Text style={styles.sub}>Seleccionar color</Text>
+              <View style={styles.swatchesRow}>
+                {COLOR_OPTIONS.map(c => (
+                  <TouchableOpacity
+                    key={c}
+                    style={[styles.swatch, { backgroundColor: c, borderColor: color === c ? '#fff' : 'transparent', borderWidth: color === c ? 2 : 0 }]}
+                    onPress={() => setColor(c)}
+                    activeOpacity={0.8}
+                  >
+                    {color === c && <Ionicons name="checkmark" size={16} color="#fff" />}
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity style={[styles.customSwatch]} onPress={() => setShowColorModal(true)}>
+                  <Text style={{ color: '#1976D2', fontWeight: '700' }}>＋</Text>
+                </TouchableOpacity>
+              </View>
 
-          <Text style={styles.sub}>Puntos seleccionados: {points.length}</Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <TouchableOpacity style={styles.mapButton} onPress={startMapSelection}>
-              <Text style={styles.mapButtonText}>Seleccionar en mapa</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.mapButton, { backgroundColor: '#9E9E9E' }]} onPress={() => setPoints([])}>
-              <Text style={styles.mapButtonText}>Limpiar puntos</Text>
-            </TouchableOpacity>
-          </View>
+              <TextInput placeholder="Color (hex)" style={styles.input} value={color} onChangeText={setColor} />
 
-          <View style={{ marginTop: 12 }}>
-            <TouchableOpacity style={styles.saveButton} onPress={saveLine}>
-              <Text style={styles.saveButtonText}>Guardar Línea y Mostrar en Mapa</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.saveButton, { backgroundColor: '#BDBDBD', marginTop: 8 }]} onPress={() => { setEditing(false); setPoints([]); setEditingRouteId(null); setName(''); setColor('#FF5722'); }}>
-              <Text style={styles.saveButtonText}>Cancelar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+              {/* Modal de paleta personalizada */}
+              <Modal visible={showColorModal} transparent animationType="fade">
+                <View style={styles.modalOverlay}>
+                  <View style={[styles.modalContainer, { width: '90%' }] }>
+                    <Text style={styles.modalTitle}>Color personalizado (RGB)</Text>
+                    <View style={{ marginTop: 8 }}>
+                      {['r','g','b'].map((ch) => {
+                        const label = ch.toUpperCase();
+                        const val = ch === 'r' ? customR : ch === 'g' ? customG : customB;
+                        const tint = label === 'R' ? '#f44336' : label === 'G' ? '#4CAF50' : '#2196F3';
+                        return (
+                          <View key={ch} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                            <Text style={{ width: 28, fontWeight: '700' }}>{label}</Text>
+                            <Slider
+                              style={{ flex: 1, marginHorizontal: 8 }}
+                              minimumValue={0}
+                              maximumValue={255}
+                              step={1}
+                              minimumTrackTintColor={tint}
+                              maximumTrackTintColor="#e0e0e0"
+                              value={Number(val) || 0}
+                              onValueChange={(v) => {
+                                const s = String(Math.round(v));
+                                if (ch === 'r') setCustomR(s);
+                                if (ch === 'g') setCustomG(s);
+                                if (ch === 'b') setCustomB(s);
+                              }}
+                            />
+                            <TextInput
+                              keyboardType="numeric"
+                              value={val}
+                              onChangeText={t => { const v = t.replace(/[^0-9]/g,''); if (ch === 'r') setCustomR(v); if (ch === 'g') setCustomG(v); if (ch === 'b') setCustomB(v); }}
+                              placeholder={label}
+                              style={{ width: 64, marginLeft: 8, backgroundColor: '#fff', padding: 8, borderRadius: 6, borderWidth: 1, borderColor: '#e0e0e0', textAlign: 'center' }}
+                            />
+                          </View>
+                        );
+                      })}
+
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, justifyContent: 'space-between' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                          <View style={{ width: 64, height: 64, borderRadius: 8, backgroundColor: `rgb(${previewR}, ${previewG}, ${previewB})`, borderWidth: 1, borderColor: '#e0e0e0' }} />
+                          <View>
+                            <Text style={{ fontWeight: '800', fontSize: 16 }}>{previewHex}</Text>
+                            <Text style={{ color: '#666', marginTop: 6 }}>Ejemplo:</Text>
+                            <View style={{ marginTop: 6, padding: 6, backgroundColor: previewHex, borderRadius: 6 }}>
+                              <Text style={{ color: previewR*0.299 + previewG*0.587 + previewB*0.114 > 186 ? '#000' : '#fff', fontWeight: '700' }}>Texto de muestra</Text>
+                            </View>
+                          </View>
+                        </View>
+                        <View style={{ flexDirection: 'row', gap: 8 }}>
+                          <TouchableOpacity style={[styles.saveButton, { backgroundColor: '#BDBDBD' }]} onPress={() => setShowColorModal(false)}><Text style={styles.saveButtonText}>Cancelar</Text></TouchableOpacity>
+                          <TouchableOpacity style={[styles.saveButton, { marginLeft: 8 }]} onPress={() => {
+                            const r = clampByte(customR);
+                            const g = clampByte(customG);
+                            const b = clampByte(customB);
+                            setColor(previewHex);
+                            setShowColorModal(false);
+                          }}><Text style={styles.saveButtonText}>Aplicar</Text></TouchableOpacity>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+              </Modal>
+
+              <Text style={styles.sub}>Puntos seleccionados: {points.length}</Text>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity style={styles.mapButton} onPress={startMapSelection}>
+                  <Text style={styles.mapButtonText}>Seleccionar en mapa</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.mapButton, { backgroundColor: '#9E9E9E' }]} onPress={() => setPoints([])}>
+                  <Text style={styles.mapButtonText}>Limpiar puntos</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Lista de puntos con metadatos */}
+              {points && points.length > 0 && (
+                <View style={{ marginTop: 12 }}>
+                  {points.map((pt, idx) => (
+                    <View key={`${pt.latitude}_${pt.longitude}_${idx}`} style={styles.pointItem}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontWeight: '700' }}>{pt.name || 'Sin nombre'}</Text>
+                        <Text style={{ color: '#666', fontSize: 12 }}>{pt.street || 'Sin calle/avenida'}</Text>
+                        <Text style={{ color: '#999', fontSize: 11 }}>{pt.latitude.toFixed(6)}, {pt.longitude.toFixed(6)}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TouchableOpacity style={[styles.smallButton, { backgroundColor: '#FFA000' }]} onPress={() => openEditPoint(idx)}>
+                          <Text style={styles.smallButtonText}>Editar</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.smallButton, { backgroundColor: '#F44336' }]} onPress={() => setPoints(prev => prev.filter((_, i) => i !== idx))}>
+                          <Text style={styles.smallButtonText}>Eliminar</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <View style={{ marginTop: 12, marginBottom: 30 }}>
+                <TouchableOpacity style={styles.saveButton} onPress={saveLine}>
+                  <Text style={styles.saveButtonText}>Guardar Línea y Mostrar en Mapa</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.saveButton, { backgroundColor: '#BDBDBD', marginTop: 8 }]} onPress={() => { setEditing(false); setPoints([]); setEditingRouteId(null); setName(''); setColor('#FF5722'); }}>
+                  <Text style={styles.saveButtonText}>Cancelar</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       )}
     </View>
   );
@@ -320,9 +595,42 @@ const AdminLinesScreen = ({ navigation, route }) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8f9fa', paddingTop: 12 },
+  floatingButton: {
+    position: 'absolute',
+    left: 12,
+    top: 12,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#1976D2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    zIndex: 1000,
+  },
   title: { fontSize: 20, fontWeight: '700', paddingHorizontal: 12, marginBottom: 8 },
+  headerRow: { paddingHorizontal: 12, paddingVertical: 6 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center' },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: '#1b2565' },
+  headerSubtitle: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+  swatchesRow: { flexDirection: 'row', marginTop: 8, marginBottom: 8, flexWrap: 'wrap' },
+  swatch: { width: 36, height: 36, borderRadius: 18, marginRight: 8, alignItems: 'center', justifyContent: 'center' },
+  customSwatch: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: '#1976D2', alignItems: 'center', justifyContent: 'center' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 20 },
+  modalContainer: { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
+  modalTitle: { fontSize: 18, fontWeight: '800', marginBottom: 8 },
+  modalLabel: { fontSize: 13, color: '#666', marginTop: 8 },
+  pointItem: { backgroundColor: '#fff', padding: 10, borderRadius: 8, marginBottom: 8, flexDirection: 'row', alignItems: 'center', elevation: 1 },
+  smallCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#e0e0e0' },
   createButton: { backgroundColor: '#1976D2', padding: 12, borderRadius: 10, alignItems: 'center' },
   createButtonText: { color: '#fff', fontWeight: '700' },
+  utilityButton: { flex: 1, padding: 10, borderRadius: 8, alignItems: 'center' },
+  utilityButtonText: { color: '#fff', fontWeight: '600', fontSize: 12, textAlign: 'center' },
   lineItem: { backgroundColor: '#fff', marginVertical: 8, marginHorizontal: 2, padding: 12, borderRadius: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 1 },
   colorBox: { width: 18, height: 18, borderRadius: 4 },
   lineName: { fontWeight: '700', fontSize: 16 },
@@ -331,6 +639,7 @@ const styles = StyleSheet.create({
   smallButton: { backgroundColor: '#1976D2', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginLeft: 8 },
   smallButtonText: { color: '#fff', fontWeight: '600' },
   form: { paddingHorizontal: 12 },
+  formScroll: { paddingHorizontal: 12, paddingTop: 12 },
   input: { backgroundColor: '#fff', padding: 10, borderRadius: 8, marginTop: 8, borderWidth: 1, borderColor: '#e9ecef' },
   sub: { marginTop: 8, color: '#666', fontSize: 13 },
   mapButton: { backgroundColor: '#FF5722', padding: 10, borderRadius: 8, marginTop: 8 },

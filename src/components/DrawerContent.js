@@ -68,8 +68,11 @@ const DrawerContent = ({ navigation, state }) => {
 
   // Siempre visible - autenticación
   if (!user) {
+    menuItems.push({ id: 'main-tabs', title: '🏠 Inicio (Navegador)', icon: 'home-outline', onPress: () => handleNavigation('MainTabs'), color: '#1976D2' });
     menuItems.push({ id: 'login', title: 'Iniciar Sesión', icon: 'log-in-outline', onPress: () => handleNavigation('Login'), color: '#2196F3' });
     menuItems.push({ id: 'register', title: 'Registrarse', icon: 'person-add-outline', onPress: () => handleNavigation('Register'), color: '#4CAF50' });
+    // Permitir a invitados ver rutas públicas sin iniciar sesión
+    menuItems.push({ id: 'public-routes', title: 'Ver Rutas Públicas', icon: 'bus-outline', onPress: () => handleNavigation('PublicRoutes'), color: '#2196F3' });
   }
 
   // Usuario autenticado

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { BackHandler, Alert } from 'react-native';
+import { BackHandler, Alert, Dimensions } from 'react-native';
 import { NavigationContainer, CommonActions } from '@react-navigation/native';
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { useAuth } from '../context/AuthContext';
@@ -9,6 +9,10 @@ import DrawerContent from '../components/DrawerContent';
 // Pantallas de autenticación
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
+import GuestScreen from '../screens/GuestScreen';
+import PublicRoutesScreen from '../screens/PublicRoutesScreen';
+import PublicMapScreen from '../screens/PublicMapScreen';
+import BottomTabs from './BottomTabs';
 
 // Pantallas principales
 import PassengerScreen from '../screens/PassengerScreen';
@@ -179,16 +183,25 @@ const AppNavigator = () => {
           headerShown: false,
           drawerType: 'slide',
           drawerStyle: {
-            width: '75%', // 3/4 de la pantalla
-          },
+              width: Math.round(Dimensions.get('window').width * 0.75), // 3/4 de la pantalla
+            },
           swipeEnabled: true,
           gestureEnabled: true,
         }}
         initialRouteName="Login"
       >
         {/* Pantallas de autenticación - siempre disponibles */}
-        <Drawer.Screen name="Login" component={LoginScreen} />
-        <Drawer.Screen name="Register" component={RegisterScreen} />
+  <Drawer.Screen name="Login" component={LoginScreen} />
+  {/* Navegador inferior moderno para usuarios (incluye Rutas, Mapa, Cuenta) */}
+  <Drawer.Screen name="MainTabs" component={BottomTabs} options={{ title: 'Explorar' }} />
+  <Drawer.Screen name="Guest" component={GuestScreen} />
+  <Drawer.Screen name="PublicRoutes" component={PublicRoutesScreen} />
+  <Drawer.Screen 
+    name="PublicMap" 
+    component={PublicMapScreen} 
+    options={{ drawerItemStyle: { display: 'none' } }} 
+  />
+  <Drawer.Screen name="Register" component={RegisterScreen} />
 
         {/* Pantallas para usuarios autenticados */}
         {user && (

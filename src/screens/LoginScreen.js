@@ -14,11 +14,11 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { isValidEmail } from '../utils/helpers';
-import { updateAdminDocument } from '../utils/updateAdminHelper';
 
 const LoginScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const { login, user, logout, userRole, isAdmin } = useAuth();
 
@@ -88,30 +88,6 @@ const LoginScreen = ({ navigation }) => {
     );
   };
 
-  const handleUpdateAdmin = async () => {
-    Alert.alert(
-      'Actualizar Admin',
-      '¿Actualizar documento del administrador?',
-      [
-        {
-          text: 'Cancelar',
-          style: 'cancel'
-        },
-        {
-          text: 'Sí',
-          onPress: async () => {
-            const success = await updateAdminDocument();
-            if (success) {
-              Alert.alert('Éxito', 'Documento del admin actualizado correctamente');
-            } else {
-              Alert.alert('Error', 'No se pudo actualizar el documento del admin');
-            }
-          }
-        }
-      ]
-    );
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
@@ -159,9 +135,27 @@ const LoginScreen = ({ navigation }) => {
             </View>
           </View>
         </Modal>
+        
+        {/* Botón de regreso */}
+        <TouchableOpacity 
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="arrow-back" size={24} color="#1976D2" />
+        </TouchableOpacity>
+
         <View style={styles.header}>
-          <Text style={styles.title}>TransportApp</Text>
-          <Text style={styles.subtitle}>Cochabamba</Text>
+          <View style={styles.brandRow}>
+            <View style={styles.logoCircle}>
+              <Ionicons name="bus" size={24} color="#fff" />
+            </View>
+            <View style={{ marginLeft: 12 }}>
+              <Text style={styles.titleMain}><Text style={{}}>Ñan</Text><Text style={styles.titleAccent}> Go</Text></Text>
+              <Text style={styles.subtitle}>Cochabamba</Text>
+            </View>
+          </View>
+          <Text style={styles.tagline}>Tu movilidad, más cerca</Text>
         </View>
 
         <View style={styles.form}>
@@ -174,13 +168,23 @@ const LoginScreen = ({ navigation }) => {
             autoCapitalize="none"
           />
           
-          <TextInput
-            style={styles.input}
-            placeholder="Contraseña"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
+          <View style={styles.passwordContainer}>
+            <TextInput
+              style={[styles.input, { paddingRight: 48 }]}
+              placeholder="Contraseña"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
+            />
+            <TouchableOpacity
+              style={styles.passwordToggle}
+              onPress={() => setShowPassword(s => !s)}
+              accessibilityLabel={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+              accessibilityHint="Alterna la visibilidad de la contraseña"
+            >
+              <Ionicons name={showPassword ? 'eye' : 'eye-off'} size={20} color="#666" />
+            </TouchableOpacity>
+          </View>
 
           <TouchableOpacity 
             style={styles.loginButton} 
@@ -202,6 +206,12 @@ const LoginScreen = ({ navigation }) => {
               ¿No tienes cuenta? Regístrate
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.guestButton}
+            onPress={() => navigation.navigate('MainTabs')}
+          >
+            <Text style={styles.guestButtonText}>Continuar como invitado</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity 
             style={styles.adminLink}
@@ -209,15 +219,6 @@ const LoginScreen = ({ navigation }) => {
           >
             <Text style={styles.adminLinkText}>
               🔐 Acceso de Administrador
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[styles.adminLink, { backgroundColor: '#FF9800', marginTop: 10 }]}
-            onPress={handleUpdateAdmin}
-          >
-            <Text style={styles.adminLinkText}>
-              🔧 Actualizar Admin (Usar una vez)
             </Text>
           </TouchableOpacity>
         </View>
@@ -236,10 +237,32 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 30,
   },
+  backButton: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    zIndex: 1000,
+  },
   header: {
     alignItems: 'center',
     marginBottom: 50,
   },
+  brandRow: { flexDirection: 'row', alignItems: 'center' },
+  logoCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#1976D2', alignItems: 'center', justifyContent: 'center', elevation: 4 },
+  titleMain: { fontSize: 28, fontWeight: '800', color: '#1b2565' },
+  titleAccent: { color: '#FF5722' },
+  tagline: { marginTop: 8, color: '#777', fontSize: 12, textAlign: 'center' },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
@@ -277,6 +300,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ddd',
   },
+  passwordContainer: {
+    position: 'relative',
+    width: '100%'
+  },
+  passwordToggle: {
+    position: 'absolute',
+    right: 16,
+    top: 10,
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
   loginButton: {
     backgroundColor: '#2E86AB',
     padding: 15,
@@ -297,6 +333,15 @@ const styles = StyleSheet.create({
     color: '#2E86AB',
     fontSize: 16,
   },
+  guestButton: {
+    marginTop: 12,
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1976D2'
+  },
+  guestButtonText: { color: '#1976D2', fontWeight: '700' },
   adminLink: {
     marginTop: 30,
     alignItems: 'center',

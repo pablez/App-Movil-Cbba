@@ -102,17 +102,27 @@ const PassengerScreen = () => {
   // Actualizar conductores cuando el mapa esté listo (solo si hay cambios significativos)
   // Cuando el mapa cambia a ready, sincronizamos desde las refs (evita closures)
   useEffect(() => {
+    console.log('🔄 useEffect mapReady disparado:', mapReady);
+    
     if (mapReady) {
+      console.log('✅ Mapa marcado como ready');
       mapReadyRef.current = true;
+      
       if (driversRef.current && driversRef.current.length > 0 && webViewRef.current && appStateRef.current === 'active') {
+        console.log('🚗 Sincronizando', driversRef.current.length, 'conductores');
         updateDriversOnMap(driversRef.current);
       }
+      
       // También sincronizar ubicación actual
       const loc = locationRef.current;
       if (loc && loc.latitude && loc.longitude) {
+        console.log('📍 Sincronizando ubicación actual:', loc);
         updateLocationOnMap(loc.latitude, loc.longitude);
+      } else {
+        console.log('ℹ️ No hay ubicación para sincronizar');
       }
     } else {
+      console.log('❌ Mapa marcado como no ready');
       mapReadyRef.current = false;
     }
   }, [mapReady]);
@@ -226,17 +236,41 @@ const PassengerScreen = () => {
     }
   };
 
-  // Actualizar ubicación en el mapa web (optimizado)
+  // Actualizar ubicación en el mapa web (optimizado y seguro)
   const updateLocationOnMap = (latitude, longitude) => {
-    if (!webViewRef.current || !mapReadyRef.current) return;
+    console.log('🔄 updateLocationOnMap llamado:', { latitude, longitude });
+    console.log('🔄 Estado del mapa:', { 
+      webViewReady: !!webViewRef.current, 
+      mapReady: mapReadyRef.current 
+    });
+    
+    if (!webViewRef.current || !mapReadyRef.current) {
+      console.log('⚠️ WebView o mapa no están listos');
+      return;
+    }
     
     try {
       // Validar coordenadas antes de enviar
-      if (typeof latitude !== 'number' || typeof longitude !== 'number' || isNaN(latitude) || isNaN(longitude)) return;
-      const message = JSON.stringify({ type: 'updateLocation', latitude, longitude });
+      if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+        console.warn('❌ Coordenadas inválidas - tipos:', typeof latitude, typeof longitude);
+        return;
+      }
+      if (isNaN(latitude) || isNaN(longitude)) {
+        console.warn('❌ Coordenadas NaN:', { latitude, longitude });
+        return;
+      }
+      
+      const message = JSON.stringify({ 
+        type: 'updateLocation', 
+        latitude: parseFloat(latitude), 
+        longitude: parseFloat(longitude) 
+      });
+      
+      console.log('📡 Enviando mensaje al WebView:', message);
       webViewRef.current.postMessage(message);
+      console.log('✅ Mensaje enviado exitosamente');
     } catch (error) {
-      console.warn('Error enviando ubicación al mapa:', error);
+      console.error('❌ Error enviando ubicación al mapa:', error);
     }
   };
 
@@ -254,7 +288,7 @@ const PassengerScreen = () => {
         !isNaN(driver.longitude)
       );
 
-  if (validDrivers.length === 0) return;
+      if (validDrivers.length === 0) return;
 
       const message = JSON.stringify({
         type: 'updateDrivers', 
@@ -276,200 +310,274 @@ const PassengerScreen = () => {
 
   // Manejar botón de localizar: centrar mapa en la ubicación del usuario cuando éste lo solicite
   const handleLocatePress = async () => {
+    console.log('🎯 handleLocatePress iniciado');
+    console.log('🎯 Estado actual:', {
+      mapReady: mapReadyRef.current,
+      hasLocation: !!locationRef.current,
+      webViewRef: !!webViewRef.current
+    });
+    
     try {
       if (!mapReadyRef.current) {
+        console.log('❌ Mapa no está listo');
         Alert.alert('Mapa no listo', 'Espera a que el mapa termine de cargar.');
         return;
       }
 
       // Si no tenemos ubicación, solicitarla (getCurrentLocation actualizará locationRef)
       if (!locationRef.current) {
+        console.log('📍 No hay ubicación, solicitando...');
         await getCurrentLocation();
+        console.log('📍 Ubicación obtenida:', locationRef.current);
       }
 
       const loc = locationRef.current;
       if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
+        console.log('✅ Enviando ubicación al mapa:', loc);
         updateLocationOnMap(loc.latitude, loc.longitude);
       } else {
+        console.log('❌ Ubicación no válida:', loc);
         Alert.alert('Ubicación no disponible', 'No se pudo obtener tu ubicación.');
       }
     } catch (err) {
-      console.warn('Error al centrar ubicación:', err);
+      console.error('❌ Error al centrar ubicación:', err);
+      Alert.alert('Error', 'Hubo un problema al obtener tu ubicación: ' + err.message);
     }
   };
 
-  // Generar HTML del mapa con OpenRouteService - Versión simplificada para pasajeros
+  // Generar HTML del mapa con OpenLayers - Versión simplificada y confiable
   const generateMapHTML = () => {
     return `
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Mapa Pasajero - OpenRouteService</title>
+        <title>Mapa Pasajero</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.4.0/ol.css">
         <style>
-            html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; }
-            .loading { 
-                position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-                background: rgba(33, 150, 243, 0.9); color: white; padding: 15px 20px; 
-                border-radius: 10px; z-index: 1000; text-align: center; font-family: Arial;
+            * { box-sizing: border-box; }
+            html, body { 
+                margin: 0; 
+                padding: 0; 
+                width: 100%; 
+                height: 100%; 
+                overflow: hidden;
+                font-family: Arial, sans-serif;
+            }
+            #map { 
+                width: 100%; 
+                height: 100%; 
+                background: #e8f4f8;
+                position: relative;
+            }
+            .loading-indicator {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: #2196F3;
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                z-index: 1000;
+                text-align: center;
             }
         </style>
-        <script src="https://cdn.jsdelivr.net/npm/ol@v7.4.0/dist/ol.js"></script>
     </head>
     <body>
-        <div id="loading" class="loading">📍 Cargando mapa del pasajero...</div>
+        <div id="loading" class="loading-indicator">🗺️ Cargando mapa...</div>
         <div id="map"></div>
+        
+        <script src="https://cdn.jsdelivr.net/npm/ol@v7.4.0/dist/ol.js"></script>
         <script>
-            // Fuentes para marcadores
-            window.passengerSource = new ol.source.Vector();
-            window.driversSource = new ol.source.Vector();
+            console.log('🚀 Iniciando mapa de Cochabamba...');
             
-            // Inicializar mapa con tiles OpenStreetMap (más confiables)
-            window.map = new ol.Map({
-                target: 'map',
-                layers: [
-                    // Capa base de OpenStreetMap (siempre funciona)
-                    new ol.layer.Tile({
-                        source: new ol.source.OSM({
-                            url: 'https://{a-c}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                            attributions: '© OpenStreetMap contributors'
-                        })
-                    }),
-                    // Capa de marcador del pasajero
-                    new ol.layer.Vector({ 
-                        source: window.passengerSource,
-                        style: new ol.style.Style({
-                            image: new ol.style.Circle({
-                                radius: 10,
-                                fill: new ol.style.Fill({ color: '#2196F3' }),
-                                stroke: new ol.style.Stroke({ color: '#ffffff', width: 3 })
-                            })
-                    // Limitar vista al departamento de Cochabamba
-                    // Bounding box aproximado [minLon, minLat, maxLon, maxLat]
-                    var cochabambaMinLon = -67.5;
-                    var cochabambaMinLat = -19.0;
-                    var cochabambaMaxLon = -64.0;
-                    var cochabambaMaxLat = -16.0;
-
-                    var minProj = ol.proj.fromLonLat([cochabambaMinLon, cochabambaMinLat]);
-                    var maxProj = ol.proj.fromLonLat([cochabambaMaxLon, cochabambaMaxLat]);
-                    var cochabambaExtent = [minProj[0], minProj[1], maxProj[0], maxProj[1]];
-
-                    var view = new ol.View({
-                      center: ol.proj.fromLonLat([-66.1568, -17.3895]), // centro aproximado
-                      zoom: 9,
-                      minZoom: 7,
-                      maxZoom: 17,
-                      extent: cochabambaExtent,
-                      constrainOnlyCenter: true
-                    });
-
-                    view.fit(cochabambaExtent, { padding: [50, 50, 50, 50] });
-
-                    view.setConstrainResolution(true);
-
-                    // Usar la vista limitada
-                    window.map.setView(view);
-                    }),
-                    // Capa de conductores
-                    new ol.layer.Vector({ 
-                        source: window.driversSource,
-                        style: new ol.style.Style({
-                            image: new ol.style.Circle({
-                                radius: 8,
-                                fill: new ol.style.Fill({ color: '#FF5722' }),
-                                stroke: new ol.style.Stroke({ color: '#ffffff', width: 2 })
-                            })
-                        })
+            var loadingElement = document.getElementById('loading');
+            
+            try {
+                // Crear fuentes de vectores
+                console.log('📦 Creando fuentes de vectores...');
+                window.passengerSource = new ol.source.Vector();
+                window.driversSource = new ol.source.Vector();
+                
+                // Crear estilos
+                console.log('🎨 Creando estilos...');
+                var passengerStyle = new ol.style.Style({
+                    image: new ol.style.Circle({
+                        radius: 12,
+                        fill: new ol.style.Fill({ color: '#2196F3' }),
+                        stroke: new ol.style.Stroke({ color: '#ffffff', width: 3 })
                     })
-                ],
-                view: new ol.View({
-                    center: ol.proj.fromLonLat([-66.1568, -17.3895]), // Cochabamba
-                    zoom: 13
-                })
-            });
-
-            // Ocultar loading y notificar que el mapa está listo
-            setTimeout(function() {
-                document.getElementById('loading').style.display = 'none';
-                console.log('Mapa cargado completamente');
+                });
+                
+                var driverStyle = new ol.style.Style({
+                    image: new ol.style.Circle({
+                        radius: 10,
+                        fill: new ol.style.Fill({ color: '#FF5722' }),
+                        stroke: new ol.style.Stroke({ color: '#ffffff', width: 2 })
+                    })
+                });
+                
+                // Configurar vista centrada en Cochabamba
+                console.log('🗺️ Configurando vista de Cochabamba...');
+                var cochabambaCenter = [-66.1568, -17.3895];
+                var centerProjected = ol.proj.fromLonLat(cochabambaCenter);
+                
+                var view = new ol.View({
+                    center: centerProjected,
+                    zoom: 12,
+                    minZoom: 8,
+                    maxZoom: 18
+                });
+                
+                // Crear fuente OSM
+                console.log('🌍 Creando fuente OSM...');
+                var osmSource = new ol.source.OSM({
+                    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    crossOrigin: 'anonymous'
+                });
+                
+                // Crear capas
+                console.log('📋 Creando capas...');
+                var tileLayer = new ol.layer.Tile({
+                    source: osmSource
+                });
+                
+                var passengerLayer = new ol.layer.Vector({ 
+                    source: window.passengerSource,
+                    style: passengerStyle
+                });
+                
+                var driverLayer = new ol.layer.Vector({ 
+                    source: window.driversSource,
+                    style: driverStyle
+                });
+                
+                // Crear mapa principal
+                console.log('🎯 Creando mapa...');
+                window.map = new ol.Map({
+                    target: 'map',
+                    layers: [tileLayer, passengerLayer, driverLayer],
+                    view: view
+                });
+                
+                // Esperar a que se complete el render
+                window.map.once('rendercomplete', function() {
+                    console.log('✅ Mapa renderizado correctamente');
+                    loadingElement.style.display = 'none';
+                    
+                    // Notificar a React Native que el mapa está listo
+                    if (window.ReactNativeWebView) {
+                        setTimeout(function() {
+                            window.ReactNativeWebView.postMessage('mapReady');
+                        }, 500);
+                    }
+                });
+                
+                // Timeout de seguridad por si algo falla
+                setTimeout(function() {
+                    console.log('⏰ Timeout - removiendo loading...');
+                    loadingElement.style.display = 'none';
+                    
+                    if (window.ReactNativeWebView) {
+                        window.ReactNativeWebView.postMessage('mapReady');
+                    }
+                }, 5000);
+                
+                window.mapInitialized = true;
+                console.log('🎉 Inicialización completa');
+                
+            } catch (error) {
+                console.error('❌ ERROR en inicialización:', error.message);
+                loadingElement.innerHTML = '❌ Error: ' + error.message;
+                
                 if (window.ReactNativeWebView) {
-                    window.ReactNativeWebView.postMessage('mapReady');
+                    window.ReactNativeWebView.postMessage('error: ' + error.message);
                 }
-            }, 2000);
-
-            // Detectar errores de carga de tiles
-            window.map.on('loadstart', function() {
-                console.log('Iniciando carga de tiles...');
-            });
-
-            window.map.on('loadend', function() {
-                console.log('Tiles cargados exitosamente');
-            });
-
-            // Funciones para actualizar marcadores
+            }
+            
+            // Función para actualizar ubicación del pasajero
             function updatePassengerLocation(lat, lng) {
+                if (!window.map || !window.passengerSource) {
+                    console.warn('❌ Mapa no listo para actualizar ubicación');
+                    return;
+                }
+                
                 try {
+                    console.log('📍 Actualizando ubicación:', lat, lng);
                     window.passengerSource.clear();
-                    const coords = ol.proj.fromLonLat([lng, lat]);
-                    const feature = new ol.Feature({ 
-                        geometry: new ol.geom.Point(coords),
-                        name: 'Tu ubicación'
+                    var coords = ol.proj.fromLonLat([lng, lat]);
+                    var feature = new ol.Feature({ 
+                        geometry: new ol.geom.Point(coords)
                     });
                     window.passengerSource.addFeature(feature);
-                    
-                    // Centrar mapa en la ubicación del pasajero
                     window.map.getView().setCenter(coords);
                     window.map.getView().setZoom(15);
+                    console.log('✅ Ubicación actualizada');
                 } catch (e) { 
-                    console.error('Error actualizando ubicación:', e); 
+                    console.error('❌ Error actualizando ubicación:', e.message);
                 }
             }
 
+            // Función para actualizar conductores
             function updateDrivers(drivers) {
+                if (!window.map || !window.driversSource) {
+                    console.warn('❌ Mapa no listo para conductores');
+                    return;
+                }
+                
                 try {
+                    console.log('🚗 Actualizando conductores:', drivers?.length || 0);
                     window.driversSource.clear();
-                    if (!drivers || !Array.isArray(drivers)) return;
                     
-                    drivers.forEach(function(driver) {
-                        if (!driver || !driver.latitude || !driver.longitude) return;
-                        const coords = ol.proj.fromLonLat([driver.longitude, driver.latitude]);
-                        const feature = new ol.Feature({ 
-                            geometry: new ol.geom.Point(coords),
-                            name: driver.name || 'Conductor',
-                            vehicle: driver.vehicle || '',
-                            plate: driver.plate || ''
+                    if (drivers && Array.isArray(drivers)) {
+                        drivers.forEach(function(driver, index) {
+                            if (driver && typeof driver.latitude === 'number' && typeof driver.longitude === 'number') {
+                                var coords = ol.proj.fromLonLat([driver.longitude, driver.latitude]);
+                                var feature = new ol.Feature({ 
+                                    geometry: new ol.geom.Point(coords),
+                                    name: driver.name || 'Conductor ' + (index + 1)
+                                });
+                                window.driversSource.addFeature(feature);
+                            }
                         });
-                        window.driversSource.addFeature(feature);
-                    });
+                    }
+                    console.log('✅ Conductores actualizados');
                 } catch (e) { 
-                    console.error('Error actualizando conductores:', e); 
+                    console.error('❌ Error actualizando conductores:', e.message);
                 }
             }
 
-            // Manejar mensajes desde React Native
-            function handleIncoming(event) {
+            // Manejo de mensajes de React Native
+            function handleMessage(event) {
+                if (!window.mapInitialized) {
+                    console.warn('❌ Mensaje recibido pero mapa no inicializado');
+                    return;
+                }
+                
                 var data = event && event.data ? event.data : null;
                 if (!data) return;
+                
                 try {
                     var msg = JSON.parse(data);
-                    if (msg.type === 'updateLocation') {
+                    console.log('📨 Mensaje recibido:', msg.type);
+                    
+                    if (msg.type === 'updateLocation' && msg.latitude && msg.longitude) {
                         updatePassengerLocation(msg.latitude, msg.longitude);
-                    } else if (msg.type === 'updateDrivers') {
-                        updateDrivers(msg.drivers || []);
+                    } else if (msg.type === 'updateDrivers' && msg.drivers) {
+                        updateDrivers(msg.drivers);
                     }
                 } catch (err) {
-                    console.log('Mensaje no JSON:', data);
+                    console.log('📨 Mensaje no JSON recibido:', data.substring(0, 50));
                 }
             }
 
-            // Escuchar mensajes en ambos eventos (compatibilidad)
-            window.addEventListener('message', handleIncoming);
-            document.addEventListener('message', handleIncoming);
+            // Escuchar mensajes
+            window.addEventListener('message', handleMessage);
+            document.addEventListener('message', handleMessage);
             
-            console.log('✅ Mapa pasajero inicializado correctamente');
+            console.log('🎯 Mapa listo para mensajes');
         </script>
     </body>
     </html>`;
@@ -520,65 +628,56 @@ const PassengerScreen = () => {
             <Text style={styles.addressText}>📍 {address}</Text>
           ) : null}
         </View>
-        {/* logout button removed */}
       </View>
 
-          <View style={styles.mapContainer}>
-              <WebView
-                ref={webViewRef}
-                source={{ html: generateMapHTML() }}
-                style={[styles.map, { zIndex: 0 }]}
-                androidLayerType="software"
-                onMessage={(event) => {
-              try {
-                const message = event.nativeEvent.data;
-                console.log('Mensaje del mapa:', message);
-                
-                // Manejar cuando el mapa esté listo
-                if (message === 'mapReady') {
-                  console.log('✅ Mapa listo - inicializando marcadores');
-                  setMapReady(true);
-                  return;
-                }
-                
-                // Procesar otros mensajes si es necesario
-                try {
-                  const data = JSON.parse(message);
-                  console.log('Mensaje JSON del mapa:', data);
-                } catch (jsonError) {
-                  console.log('Mensaje no JSON del mapa:', message);
-                }
-              } catch (error) {
-                console.log('Error general procesando mensaje:', error);
-              }
-            }}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            startInLoadingState={true}
-            mixedContentMode="compatibility"
-            allowsInlineMediaPlayback={true}
-            mediaPlaybackRequiresUserAction={false}
-            allowsFullscreenVideo={false}
-            bounces={false}
-            renderLoading={() => (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color="#2196F3" />
-                <Text style={styles.loadingText}>Cargando mapa OpenRouteService...</Text>
-              </View>
-            )}
-            onLoadEnd={() => {
-              console.log('WebView cargado - esperando mensaje mapReady del HTML');
-            }}
-            onError={(syntheticEvent) => {
-              const { nativeEvent } = syntheticEvent;
-              console.error('WebView error:', nativeEvent);
-            }}
-            onHttpError={(syntheticEvent) => {
-              const { nativeEvent } = syntheticEvent;
-              console.error('WebView HTTP error:', nativeEvent);
-            }}
-            />
-        </View>
+      <View style={styles.mapContainer}>
+        <WebView
+          ref={webViewRef}
+          source={{ html: generateMapHTML() }}
+          style={styles.map}
+          androidLayerType="hardware"
+          onMessage={(event) => {
+            const message = event.nativeEvent.data;
+            console.log('📨 Mensaje del WebView:', message);
+            
+            if (message === 'mapReady') {
+              console.log('✅ Mapa confirmado como listo');
+              setMapReady(true);
+              mapReadyRef.current = true;
+            } else if (message.startsWith('debug:')) {
+              console.log('🔍 DEBUG WebView:', message);
+            } else if (message.startsWith('error:')) {
+              console.error('❌ ERROR WebView:', message);
+              Alert.alert('Error en el mapa', message.replace('error:', ''));
+            }
+          }}
+          javaScriptEnabled={true}
+          domStorageEnabled={true}
+          startInLoadingState={true}
+          mixedContentMode="compatibility"
+          allowsInlineMediaPlayback={true}
+          mediaPlaybackRequiresUserAction={false}
+          allowsFullscreenVideo={false}
+          bounces={false}
+          renderLoading={() => (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#2196F3" />
+              <Text style={styles.loadingText}>Cargando mapa OpenRouteService...</Text>
+            </View>
+          )}
+          onLoadEnd={() => {
+            console.log('WebView cargado - esperando mensaje mapReady del HTML');
+          }}
+          onError={(syntheticEvent) => {
+            const { nativeEvent } = syntheticEvent;
+            console.error('WebView error:', nativeEvent);
+          }}
+          onHttpError={(syntheticEvent) => {
+            const { nativeEvent } = syntheticEvent;
+            console.error('WebView HTTP error:', nativeEvent);
+          }}
+        />
+      </View>
 
       {/* Botón flotante para abrir el Drawer (arriba a la izquierda) */}
       <TouchableOpacity
@@ -606,7 +705,7 @@ const PassengerScreen = () => {
 
       {/* Botón flotante para centrar la ubicación (naranja) */}
       <TouchableOpacity
-        style={[styles.fabLocate, { top: 110 + statusBarHeight, right: 20 }]}
+        style={[styles.fabLocate, { top: 580 + statusBarHeight, right: 20 }]}
         onPress={handleLocatePress}
         activeOpacity={0.85}
       >
@@ -723,14 +822,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  // logout styles removed
   map: {
     flex: 1,
+    backgroundColor: '#f5f5f5',
   },
   mapContainer: {
     flex: 1,
     backgroundColor: '#f5f5f5',
     position: 'relative',
+    overflow: 'hidden',
   },
   fab: {
     position: 'absolute',

@@ -51,7 +51,10 @@ service cloud.firestore {
 
     // Rutas (líneas) - lectura para cualquier usuario autenticado, escrituras sólo por admins
     match /routes/{routeId} {
-      allow read: if request.auth != null;
+      // Permitimos lectura si el usuario está autenticado OR si el documento tiene
+      // un campo `public == true`. Esto permite a invitados ver rutas marcadas como públicas
+      // mientras se protege el resto de rutas que solo deben ser visibles para usuarios autenticados.
+      allow read: if request.auth != null || (resource.data.public == true);
       allow create, update, delete: if request.auth != null && (
         // comprobar que el creador es admin según su documento users/{uid}
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&

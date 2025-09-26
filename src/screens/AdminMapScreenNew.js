@@ -745,22 +745,28 @@ const AdminMapScreen = ({ navigation, route }) => {
 
       {/* Controles */}
       <View style={styles.controlsContainer}>
-        <TouchableOpacity 
-          style={[styles.controlButton, !location && styles.controlButtonDisabled]} 
-          onPress={centerOnLocation}
-          disabled={!location}
-        >
-          <Text style={styles.controlButtonText}>
-            {location ? '🎯 Mi Ubicación' : '📍 Obteniendo GPS...'}
-          </Text>
-        </TouchableOpacity>
-        
-        <Text style={styles.locationText}>
-          {location 
-            ? `📍 ${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
-            : '🔍 Buscando ubicación...'
-          }
-        </Text>
+        {/* Ocultar control de ubicación y coordenadas cuando estamos en modo edición
+            (editMode explícito en params o cuando se pasa editableRoute) */}
+        {!(route && route.params && (route.params.editMode || route.params.editableRoute)) && (
+          <>
+            <TouchableOpacity 
+              style={[styles.controlButton, !location && styles.controlButtonDisabled]} 
+              onPress={centerOnLocation}
+              disabled={!location}
+            >
+              <Text style={styles.controlButtonText}>
+                {location ? '🎯 Mi Ubicación' : '📍 Obteniendo GPS...'}
+              </Text>
+            </TouchableOpacity>
+            
+            <Text style={styles.locationText}>
+              {location 
+                ? `📍 ${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
+                : '🔍 Buscando ubicación...'
+              }
+            </Text>
+          </>
+        )}
         {/* Native edit controls relocated here to avoid overlap with header */}
         {(route && route.params && route.params.editMode) ? (
           <View style={{ flexDirection: 'row', marginTop: 10, justifyContent: 'center', gap: 8 }}>
