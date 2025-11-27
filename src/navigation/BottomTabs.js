@@ -18,7 +18,7 @@ const TabsOnly = () => {
   const insets = useSafeAreaInsets();
 
   return (
-    <View style={{ flex: 1, paddingTop: insets.top }}>
+    <View style={{ flex: 1 }}>
       <Tab.Navigator
         screenOptions={({ route }) => ({
           headerShown: false,
@@ -26,19 +26,21 @@ const TabsOnly = () => {
           tabBarLabelStyle: { fontSize: 12, fontWeight: '600', marginBottom: 4 },
           tabBarStyle: {
             position: 'absolute',
-            left: 16,
-            right: 16,
-            bottom: Math.max(insets.bottom, 0),
-            height: 70,
-            elevation: 12,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 70 + Math.max(insets.bottom, 0),
+            elevation: 8,
             backgroundColor: '#ffffff',
             shadowColor: '#000',
-            shadowOpacity: 0.15,
-            shadowOffset: { width: 0, height: 8 },
-            shadowRadius: 16,
-            borderTopWidth: 0,
-            paddingTop: 8,
-            paddingBottom: 8,
+            shadowOpacity: 0.1,
+            shadowOffset: { width: 0, height: -2 },
+            shadowRadius: 8,
+            borderTopWidth: 1,
+            borderTopColor: '#e0e0e0',
+            paddingTop: 10,
+            paddingBottom: Math.max(insets.bottom, 10),
+            paddingHorizontal: 20,
           },
           tabBarItemStyle: {
             paddingVertical: 4,

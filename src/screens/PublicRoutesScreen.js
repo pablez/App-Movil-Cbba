@@ -14,7 +14,11 @@ const PublicRoutesScreen = ({ navigation }) => {
   const [expandedRoutes, setExpandedRoutes] = useState(new Set()); // Para controlar qué rutas están expandidas
   const [searchText, setSearchText] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  
+  // Calcular espaciado dinámico para evitar superposición con bottom tabs
   const insets = useSafeAreaInsets();
+  const TAB_BAR_HEIGHT = 70;
+  const BOTTOM_SPACING = TAB_BAR_HEIGHT + Math.max(insets.bottom, 0); // Espacio para el tab bar integrado
 
   useEffect(() => {
     // Primero intentamos rutas marcadas como públicas
@@ -83,7 +87,15 @@ const PublicRoutesScreen = ({ navigation }) => {
         return true;
       }
 
-      // Buscar en las paradas si existen
+      // Buscar en los puntos detallados si existen
+      if (route.points && route.points.length > 0) {
+        return route.points.some(point => {
+          return (point.name && point.name.toLowerCase().includes(searchTerm)) ||
+                 (point.street && point.street.toLowerCase().includes(searchTerm));
+        });
+      }
+
+      // Fallback: buscar en las paradas antiguas si existen
       if (route.stops && route.stops.length > 0) {
         return route.stops.some(stop => {
           return (stop.name && stop.name.toLowerCase().includes(searchTerm)) ||
@@ -91,8 +103,6 @@ const PublicRoutesScreen = ({ navigation }) => {
         });
       }
 
-      // Si no hay paradas, buscar en coordenadas convertidas a direcciones aproximadas
-      // (esto es básico, en producción se podría integrar con geocoding)
       return false;
     });
 
@@ -101,9 +111,19 @@ const PublicRoutesScreen = ({ navigation }) => {
 
   const openOnMap = (r) => {
     // Normalizar coordenadas a [[lng,lat], ...]
-    const coords = Array.isArray(r.coordinates) && r.coordinates.length > 0 && Array.isArray(r.coordinates[0])
-      ? r.coordinates
-      : (r.coordinates || []).map(c => [c.lng, c.lat]);
+    let coords = [];
+    
+    if (r.coordinates && Array.isArray(r.coordinates) && r.coordinates.length > 0) {
+      // Si coordinates ya es un array de arrays [[lng,lat], ...]
+      if (Array.isArray(r.coordinates[0])) {
+        coords = r.coordinates;
+      } 
+      // Si coordinates es un array de objetos {lat, lng}
+      else if (r.coordinates[0] && typeof r.coordinates[0] === 'object' && 'lat' in r.coordinates[0]) {
+        coords = r.coordinates.map(c => [c.lng, c.lat]);
+      }
+    }
+    
     navigation.navigate('PublicMap', { customRoute: { coordinates: coords, color: r.color, name: r.name } });
   };
 
@@ -198,7 +218,7 @@ const PublicRoutesScreen = ({ navigation }) => {
   return (
     <View style={styles.container}>
       {/* Título del screen */}
-      <View style={[styles.header, { paddingTop: (insets.top || 0) + 20 }]}>
+      <View style={[styles.header, { paddingTop: (insets.top || 0) + 15 }]}>
         <Text style={styles.headerTitle}>🚌 Rutas Públicas</Text>
         <Text style={styles.headerSubtitle}>
           {isSearching 
@@ -248,7 +268,7 @@ const PublicRoutesScreen = ({ navigation }) => {
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ 
           paddingHorizontal: 12,
-          paddingBottom: 120, // Espacio para tab bar
+          paddingBottom: BOTTOM_SPACING + 20, // Espacio dinámico para tab bar
         }}
         ListEmptyComponent={
           isSearching ? (
@@ -265,6 +285,7 @@ const PublicRoutesScreen = ({ navigation }) => {
         }
         renderItem={({ item }) => {
           const isExpanded = expandedRoutes.has(item.id);
+          const hasDetailedPoints = item.points && item.points.length > 0;
           const hasStops = item.stops && item.stops.length > 0;
           const hasCoordinates = item.coordinates && item.coordinates.length > 0;
           
@@ -291,15 +312,51 @@ const PublicRoutesScreen = ({ navigation }) => {
                     )}
                   </Text>
                   <Text style={styles.sub}>
-                    {hasCoordinates ? `${item.coordinates.length} puntos` : 'Sin coordenadas'}
-                    {hasStops && ` • ${item.stops.length} paradas`}
+                    {hasDetailedPoints 
+                      ? `${item.points.length} paradas con detalles` 
+                      : hasCoordinates 
+                        ? `${item.coordinates.length} puntos básicos` 
+                        : 'Sin coordenadas'
+                    }
+                    {hasStops && ` • ${item.stops.length} paradas adicionales`}
                   </Text>
                   
                   {/* Mostrar paradas/puntos según el estado de expansión */}
-                  {(hasStops || hasCoordinates) && (
+                  {(hasDetailedPoints || hasStops || hasCoordinates) && (
                     <View style={styles.stopsContainer}>
-                      {/* Mostrar paradas si existen */}
-                      {hasStops && (
+                      {/* Mostrar puntos detallados si existen */}
+                      {hasDetailedPoints && (
+                        <>
+                          <Text style={styles.stopsTitle}>🚏 Paradas de la ruta:</Text>
+                          {(isExpanded ? item.points : item.points.slice(0, 3)).map((point, index) => (
+                            <View key={index} style={styles.stopItem}>
+                              <View style={styles.stopInfo}>
+                                <Text style={styles.stopText}>
+                                  🟢 {point.name || `Parada ${index + 1}`}
+                                </Text>
+                                <Text style={styles.streetText}>
+                                  📍 {point.street || 'Calle no especificada'}
+                                </Text>
+                              </View>
+                              {/* Indicador si esta parada coincide con la búsqueda */}
+                              {isSearching && searchText && (
+                                (point.name && point.name.toLowerCase().includes(searchText.toLowerCase())) ||
+                                (point.street && point.street.toLowerCase().includes(searchText.toLowerCase()))
+                              ) && (
+                                <Ionicons name="checkmark-circle" size={14} color="#4CAF50" style={styles.matchIcon} />
+                              )}
+                            </View>
+                          ))}
+                          {!isExpanded && item.points.length > 3 && (
+                            <Text style={styles.moreStops}>
+                              +{item.points.length - 3} paradas más
+                            </Text>
+                          )}
+                        </>
+                      )}
+
+                      {/* Mostrar paradas antiguas si existen y no hay points */}
+                      {!hasDetailedPoints && hasStops && (
                         <>
                           <Text style={styles.stopsTitle}>📍 Paradas principales:</Text>
                           {(isExpanded ? item.stops : item.stops.slice(0, 3)).map((stop, index) => (
@@ -324,8 +381,8 @@ const PublicRoutesScreen = ({ navigation }) => {
                         </>
                       )}
                       
-                      {/* Mostrar coordenadas si no hay paradas definidas */}
-                      {!hasStops && hasCoordinates && (
+                      {/* Mostrar coordenadas básicas si no hay points ni paradas definidas */}
+                      {!hasDetailedPoints && !hasStops && hasCoordinates && (
                         <>
                           <Text style={styles.stopsTitle}>🗺️ Puntos de ruta:</Text>
                           {isExpanded ? (
@@ -363,7 +420,7 @@ const PublicRoutesScreen = ({ navigation }) => {
               {/* Botones de acción */}
               <View style={styles.actions}>
                 {/* Botón para expandir/colapsar */}
-                {((hasStops && item.stops.length > 3) || (!hasStops && hasCoordinates && item.coordinates.length > 2)) && (
+                {((hasDetailedPoints && item.points.length > 3) || (hasStops && item.stops.length > 3) || (!hasDetailedPoints && !hasStops && hasCoordinates && item.coordinates.length > 2)) && (
                   <TouchableOpacity 
                     style={[styles.actionBtn, styles.expandBtn]} 
                     onPress={() => toggleRouteExpansion(item.id)}
@@ -399,17 +456,22 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: '#1976D2',
     paddingHorizontal: 16,
-    paddingTop: 20, // Reducido ya que no hay botón flotante
-    paddingBottom: 16,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-    marginBottom: 8,
+    paddingBottom: 20,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    marginBottom: 0,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 4,
   },
   headerTitle: {
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: '800',
     color: '#fff',
     textAlign: 'center',
+    letterSpacing: 0.5,
   },
   headerSubtitle: {
     fontSize: 14,
@@ -441,7 +503,8 @@ const styles = StyleSheet.create({
   },
   searchContainer: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingTop: 16,
+    paddingBottom: 8,
     backgroundColor: '#f8f9fa',
   },
   searchBox: {
@@ -507,8 +570,25 @@ const styles = StyleSheet.create({
   },
   stopItem: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  stopInfo: {
+    flex: 1,
+  },
+  stopText: {
+    fontSize: 13,
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 2,
+    paddingLeft: 8,
+  },
+  streetText: {
+    fontSize: 12,
+    color: '#666',
+    paddingLeft: 8,
+    marginBottom: 4,
   },
   matchIcon: {
     marginLeft: 8,

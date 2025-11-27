@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ActivityIndicat
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import LocationService from '../services/LocationService';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const GuestScreen = ({ navigation }) => {
   const [location, setLocation] = useState(null);
@@ -19,6 +20,16 @@ const GuestScreen = ({ navigation }) => {
   
   // Estado para el aviso de explorar sin cuenta
   const [showGuestModal, setShowGuestModal] = useState(false);
+  
+  // Estados para modal de confirmación
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmType, setConfirmType] = useState('origin'); // 'origin' o 'destination'
+  
+  // Calcular espaciado dinámico para evitar superposición con bottom tabs
+  const insets = useSafeAreaInsets();
+  const TAB_BAR_HEIGHT = 70;
+  const BOTTOM_SPACING = TAB_BAR_HEIGHT + Math.max(insets.bottom, 16); // 16px mínimo de padding
 
   useEffect(() => {
     let mounted = true;
@@ -83,21 +94,14 @@ const GuestScreen = ({ navigation }) => {
     
     if (!startPoint) {
       setStartPoint(coordinate);
-      Alert.alert(
-        'Punto de inicio seleccionado',
-        'Ahora toca en el mapa para seleccionar el punto de destino',
-        [{ text: 'OK' }]
-      );
+      setConfirmType('origin');
+      setConfirmMessage('¡Origen seleccionado correctamente!\nAhora selecciona tu destino');
+      setShowConfirmModal(true);
     } else if (!endPoint) {
       setEndPoint(coordinate);
-      Alert.alert(
-        'Punto de destino seleccionado',
-        '¿Deseas generar la ruta entre estos dos puntos?',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Generar Ruta', onPress: () => generateRoute(startPoint, coordinate) }
-        ]
-      );
+      setConfirmType('destination');
+      setConfirmMessage('¡Destino seleccionado correctamente!\n¿Listo para generar la ruta?');
+      setShowConfirmModal(true);
     }
   };
 
@@ -158,12 +162,17 @@ const GuestScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header con el nombre de la app */}
+      {/* Header con el nombre de la app en esquina superior izquierda */}
       <View style={styles.appHeader}>
-        <Text style={styles.appName}>Ñan Go</Text>
+        <View style={styles.appNameContainer}>
+          <Text style={styles.appName}>
+            <Text style={styles.appNamePrimary}>Ñan</Text>
+            <Text style={styles.appNameSecondary}> Go</Text>
+          </Text>
+        </View>
       </View>
 
-      <View style={styles.mapWrap}>
+      <View style={[styles.mapWrap, { paddingBottom: BOTTOM_SPACING }]}>
         {loading && !location ? (
           <View style={styles.loadingWrap}><ActivityIndicator size="large" color="#1976D2" /></View>
         ) : error && !location ? (
@@ -240,7 +249,7 @@ const GuestScreen = ({ navigation }) => {
 
         {/* Panel de control para selección de puntos */}
         {isSelectingPoints && (
-          <View style={styles.selectionPanel}>
+          <View style={[styles.selectionPanel, { top: 105 }]}>
             <View style={styles.selectionHeader}>
               <View style={styles.animatedIcon}>
                 <Ionicons name="navigate-circle" size={24} color="#1976D2" />
@@ -274,6 +283,22 @@ const GuestScreen = ({ navigation }) => {
               </View>
             </View>
             
+            {/* Botón para usar ubicación actual como origen */}
+            {!startPoint && location && (
+              <TouchableOpacity 
+                style={styles.useCurrentLocationBtn}
+                onPress={() => {
+                  setStartPoint({ latitude: location.latitude, longitude: location.longitude });
+                  setConfirmType('origin');
+                  setConfirmMessage('¡Ubicación actual seleccionada!\nTu posición se estableció como origen');
+                  setShowConfirmModal(true);
+                }}
+              >
+                <Ionicons name="locate" size={16} color="#4CAF50" />
+                <Text style={styles.useCurrentLocationText}>Usar mi ubicación actual como origen</Text>
+              </TouchableOpacity>
+            )}
+            
             {startPoint && endPoint && !routeLoading && (
               <TouchableOpacity 
                 style={styles.generateRouteBtn}
@@ -295,7 +320,7 @@ const GuestScreen = ({ navigation }) => {
 
         {/* Indicador visual cuando está en modo selección */}
         {isSelectingPoints && (
-          <View style={styles.selectionOverlay}>
+          <View style={[styles.selectionOverlay, { bottom: BOTTOM_SPACING + 80 }]}>
             <Text style={styles.overlayText}>
               {!startPoint ? '📍 TOCA PARA SELECCIONAR ORIGEN' :
                !endPoint ? '📍 TOCA PARA SELECCIONAR DESTINO' :
@@ -304,7 +329,7 @@ const GuestScreen = ({ navigation }) => {
           </View>
         )}
 
-        <View style={styles.mapButtons} pointerEvents="box-none">
+        <View style={[styles.mapButtons, { bottom: BOTTOM_SPACING + 16 }]} pointerEvents="box-none">
           {/* Botón principal para activar/desactivar selección de puntos */}
           <TouchableOpacity
             style={[styles.fab, styles.navigationFab, { 
@@ -348,6 +373,70 @@ const GuestScreen = ({ navigation }) => {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Modal de confirmación con animación de check */}
+      <Modal
+        visible={showConfirmModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowConfirmModal(false)}
+      >
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.confirmModalContent}>
+            <View style={styles.checkAnimationContainer}>
+              <View style={[styles.checkCircle, {
+                backgroundColor: confirmType === 'origin' ? '#2196F3' : '#FF5722'
+              }]}>
+                <Ionicons name="checkmark" size={32} color="#fff" />
+              </View>
+            </View>
+            
+            <Text style={styles.confirmModalTitle}>
+              {confirmType === 'origin' ? '✅ Origen Establecido' : '✅ Destino Establecido'}
+            </Text>
+            
+            <Text style={styles.confirmModalMessage}>
+              {confirmMessage}
+            </Text>
+            
+            <View style={styles.confirmModalActions}>
+              {confirmType === 'destination' ? (
+                <>
+                  <TouchableOpacity 
+                    style={[styles.confirmActionBtn, styles.generateRouteConfirmBtn]}
+                    onPress={() => {
+                      setShowConfirmModal(false);
+                      setTimeout(() => {
+                        generateRoute(startPoint, endPoint);
+                      }, 300);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="navigate" size={18} color="#fff" />
+                    <Text style={styles.confirmActionText}>Generar Ruta</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={[styles.confirmActionBtn, styles.continueSelectingBtn]}
+                    onPress={() => setShowConfirmModal(false)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.continueSelectingText}>Continuar</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity 
+                  style={[styles.confirmActionBtn, styles.continueSelectingBtn]}
+                  onPress={() => setShowConfirmModal(false)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.continueSelectingText}>Continuar</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Modal de aviso para usuarios invitados */}
       <Modal
@@ -496,23 +585,42 @@ const GuestScreen = ({ navigation }) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-  // Header minimalista con el nombre de la app
+  // Header elegante con el nombre de la app en esquina superior izquierda
   appHeader: {
-    backgroundColor: '#1976D2',
-    paddingVertical: 12,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    zIndex: 1000,
+    paddingTop: 20, // Reducido para posicionar más arriba
     paddingHorizontal: 16,
-    alignItems: 'center',
-    elevation: 3,
+    paddingBottom: 8, // Reducido también
+  },
+  appNameContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)', // Fondo semi-transparente blanco
+    paddingVertical: 10, // Aumentado para el texto más grande
+    paddingHorizontal: 18, // Aumentado proporcionalmente
+    borderRadius: 22, // Aumentado para mantener proporción
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.08)',
+    elevation: 4,
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
+    shadowRadius: 8,
+    alignSelf: 'flex-start', // Se ajusta al contenido
   },
   appName: {
-    fontSize: 24,
+    fontSize: 28, // Aumentado de 24 a 28
     fontWeight: '800',
-    color: '#fff',
-    letterSpacing: 1,
+    letterSpacing: 0.5,
+  },
+  appNamePrimary: {
+    color: '#1a1a1a', // Negro más suave para "Ñan"
+    fontWeight: '900',
+  },
+  appNameSecondary: {
+    color: '#FF6B35', // Naranja más vibrante para "Go"
+    fontWeight: '800',
   },
   body: { padding: 20 },
   info: { color: '#444', lineHeight: 20 },
@@ -521,7 +629,7 @@ const styles = StyleSheet.create({
   mapWrap: { flex: 1 },
   map: { flex: 1 },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  mapButtons: { position: 'absolute', right: 16, bottom: 100, alignItems: 'center' },
+  mapButtons: { position: 'absolute', right: 16, alignItems: 'center' },
   fab: { 
     width: 48, 
     height: 48, 
@@ -569,7 +677,6 @@ const styles = StyleSheet.create({
   // Estilos para panel de selección
   selectionPanel: {
     position: 'absolute',
-    top: 16,
     left: 16,
     right: 16,
     backgroundColor: '#fff',
@@ -658,6 +765,24 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontSize: 16,
   },
+  useCurrentLocationBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E8F5E8',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#4CAF50',
+  },
+  useCurrentLocationText: {
+    color: '#2E7D32',
+    fontWeight: '600',
+    marginLeft: 8,
+    fontSize: 14,
+  },
   routeLoadingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -674,7 +799,6 @@ const styles = StyleSheet.create({
   // Indicador visual de superposición
   selectionOverlay: {
     position: 'absolute',
-    bottom: 180,
     left: 16,
     right: 16,
     backgroundColor: 'rgba(25, 118, 210, 0.9)',
@@ -689,6 +813,93 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 14,
     textAlign: 'center',
+  },
+
+  // Estilos para modal de confirmación
+  confirmModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  confirmModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    padding: 32,
+    width: '100%',
+    maxWidth: 320,
+    alignItems: 'center',
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 12,
+  },
+  checkAnimationContainer: {
+    marginBottom: 24,
+  },
+  checkCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 3 },
+    shadowRadius: 6,
+  },
+  confirmModalTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1a1a1a',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  confirmModalMessage: {
+    fontSize: 16,
+    color: '#555',
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 24,
+  },
+  confirmModalActions: {
+    width: '100%',
+    gap: 12,
+  },
+  confirmActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+  },
+  generateRouteConfirmBtn: {
+    backgroundColor: '#4CAF50',
+  },
+  continueSelectingBtn: {
+    backgroundColor: '#f8f9fa',
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  confirmActionText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    marginLeft: 8,
+  },
+  continueSelectingText: {
+    color: '#6c757d',
+    fontSize: 16,
+    fontWeight: '600',
   },
 
   // Estilos para modal de invitado

@@ -214,12 +214,12 @@ const LoginScreen = ({ navigation }) => {
           </TouchableOpacity>
 
           <TouchableOpacity 
-            style={styles.adminLink}
-            onPress={handleAdminLogin}
+            // style={styles.adminLink}
+            // onPress={handleAdminLogin}
           >
-            <Text style={styles.adminLinkText}>
+            {/* <Text style={styles.adminLinkText}>
               🔐 Acceso de Administrador
-            </Text>
+            </Text> */}
           </TouchableOpacity>
         </View>
       </View>

@@ -238,7 +238,7 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: '#2196F3',
-    paddingTop: 20,
+    paddingTop: 48,
     paddingBottom: 20,
     paddingHorizontal: 20,
     flexDirection: 'row',
@@ -310,9 +310,9 @@ const styles = StyleSheet.create({
   },
   footer: {
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 0, // Menos espacio abajo
-    borderTopWidth: 1,
+    paddingTop: 15,
+    paddingBottom: 55, // Menos espacio abajo
+    borderTopWidth: 5,
     borderTopColor: '#E0E0E0',
     alignItems: 'center',
   },

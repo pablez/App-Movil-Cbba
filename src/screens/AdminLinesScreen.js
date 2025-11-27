@@ -22,21 +22,6 @@ const AdminLinesScreen = ({ navigation, route }) => {
   // Rutas persistidas en Firestore
   const [persistedRoutes, setPersistedRoutes] = useState([]);
 
-  // Líneas incorporadas en el app (constantes)
-  const builtinLines = [
-    {
-      id: 'line150',
-      name: ROUTE_INFO.line150.name,
-      color: ROUTE_INFO.line150.color,
-      coordinates: extractCoordinatesFromGeo(ROUTE_150_DATA)
-    },
-    {
-      id: 'line230',
-      name: ROUTE_INFO.line230.name,
-      color: ROUTE_INFO.line230.color,
-      coordinates: extractCoordinatesFromGeo(ROUTE_230_DATA)
-    }
-  ];
 
   // Estado para crear/editar línea
   const [editing, setEditing] = useState(false);
@@ -50,6 +35,10 @@ const AdminLinesScreen = ({ navigation, route }) => {
   const [pointStreet, setPointStreet] = useState('');
   const [pointName, setPointName] = useState('');
   const [editingPointIndex, setEditingPointIndex] = useState(null);
+  // Modal para mostrar detalles de la ruta
+  const [showRouteDetailsModal, setShowRouteDetailsModal] = useState(false);
+  const [selectedRouteForDetails, setSelectedRouteForDetails] = useState(null);
+  // Modal de color personalizado
   const [showColorModal, setShowColorModal] = useState(false);
   const [customR, setCustomR] = useState('255');
   const [customG, setCustomG] = useState('87');
@@ -282,11 +271,23 @@ const AdminLinesScreen = ({ navigation, route }) => {
       // coordsPairs están en [lng, lng], por lo que mapeamos directamente
       const coordsObjects = coordsPairs.map(c => ({ lng: c[0], lat: c[1] }));
 
+      // Preparar información completa de los puntos con metadatos
+      const pointsWithMetadata = points.map(p => ({
+        latitude: p.latitude,
+        longitude: p.longitude,
+        street: p.street || '', // Calle o avenida
+        name: p.name || '', // Nombre del punto
+        // Mantener compatibilidad con formato [lng, lat]
+        coordinates: [p.longitude, p.latitude]
+      }));
+
       // Construir payload base
       const payloadBase = {
         name,
         color,
-        coordinates: coordsObjects,
+        coordinates: coordsObjects, // Formato compatible con el sistema existente
+        points: pointsWithMetadata, // Nueva información completa de puntos
+        totalPoints: points.length, // Contador de puntos
         public: true // Marcar automáticamente nuevas rutas como públicas
       };
 
@@ -353,39 +354,61 @@ const AdminLinesScreen = ({ navigation, route }) => {
     return coords.map(c => [c.lng, c.lat]);
   };
 
-  const renderLine = ({ item }) => (
-    <View style={styles.lineItem}>
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <View style={[styles.colorBox, { backgroundColor: item.color }]} />
-        <View style={{ marginLeft: 10 }}>
-          <Text style={styles.lineName}>{item.name}</Text>
-          <Text style={styles.lineMeta}>{item.coordinates.length} puntos</Text>
+  const renderLine = ({ item }) => {
+    // Mostrar información más detallada si está disponible
+    const pointsInfo = item.points ? `${item.points.length} puntos con detalles` : `${item.coordinates.length} puntos`;
+    const hasDetailedPoints = item.points && item.points.some(p => p.street || p.name);
+    
+    return (
+      <View style={styles.lineItem}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+          <View style={[styles.colorBox, { backgroundColor: item.color }]} />
+          <View style={{ marginLeft: 10, flex: 1 }}>
+            <Text style={styles.lineName}>{item.name}</Text>
+            <Text style={styles.lineMeta}>{pointsInfo}</Text>
+            {hasDetailedPoints && (
+              <Text style={[styles.lineMeta, { color: '#4CAF50', fontSize: 11 }]}>
+                ✓ Con información de calles y nombres
+              </Text>
+            )}
+          </View>
+        </View>
+        <View style={styles.lineActions}>
+          <TouchableOpacity style={[styles.smallButton, { backgroundColor: '#FFA000' }]} onPress={() => {
+            // Abrir la pantalla dedicada de edición para mover/añadir puntos.
+            const coords = convertCoordsToPairs(item.coordinates);
+            navigation.navigate('EditMap', { editMode: true, editableRoute: { id: item.id, coordinates: coords, name: item.name, color: item.color }, returnTo: 'AdminLines' });
+          }}>
+            <Text style={styles.smallButtonText}>Editar</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.smallButton} onPress={() => {
+            const coords = convertCoordsToPairs(item.coordinates);
+            navigation.navigate('AdminMap', { customRoute: { coordinates: coords, color: item.color, name: item.name } });
+          }}>
+            <Text style={styles.smallButtonText}>Mostrar</Text>
+          </TouchableOpacity>
+          
+          {/* Botón para ver detalles si tiene información de puntos */}
+          {hasDetailedPoints && (
+            <TouchableOpacity style={[styles.smallButton, { backgroundColor: '#9C27B0' }]} onPress={() => {
+              setSelectedRouteForDetails(item);
+              setShowRouteDetailsModal(true);
+            }}>
+              <Text style={styles.smallButtonText}>Detalles</Text>
+            </TouchableOpacity>
+          )}
+          
+          {/* Mostrar botón eliminar solo si la ruta viene de Firestore (persisted) */}
+          {persistedRoutes.find(r => r.id === item.id) ? (
+            <TouchableOpacity style={[styles.smallButton, { backgroundColor: '#F44336' }]} onPress={() => deleteLine(item.id)}>
+              <Text style={styles.smallButtonText}>Eliminar</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </View>
-      <View style={styles.lineActions}>
-        <TouchableOpacity style={[styles.smallButton, { backgroundColor: '#FFA000' }]} onPress={() => {
-          // Abrir la pantalla dedicada de edición para mover/añadir puntos.
-          const coords = convertCoordsToPairs(item.coordinates);
-          navigation.navigate('EditMap', { editMode: true, editableRoute: { id: item.id, coordinates: coords, name: item.name, color: item.color }, returnTo: 'AdminLines' });
-        }}>
-          <Text style={styles.smallButtonText}>Editar</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.smallButton} onPress={() => {
-          const coords = convertCoordsToPairs(item.coordinates);
-          navigation.navigate('AdminMap', { customRoute: { coordinates: coords, color: item.color, name: item.name } });
-        }}>
-          <Text style={styles.smallButtonText}>Mostrar</Text>
-        </TouchableOpacity>
-        {/* Mostrar botón eliminar solo si la ruta viene de Firestore (persisted) */}
-        {persistedRoutes.find(r => r.id === item.id) ? (
-          <TouchableOpacity style={[styles.smallButton, { backgroundColor: '#F44336' }]} onPress={() => deleteLine(item.id)}>
-            <Text style={styles.smallButtonText}>Eliminar</Text>
-          </TouchableOpacity>
-        ) : null}
-      </View>
-    </View>
-  );
+    );
+  };
 
   // Calcular offset superior para evitar solapamiento con la barra de notificación / notch
   const topOffset = Platform.OS === 'android' ? (StatusBar.currentHeight ? StatusBar.currentHeight + 8 : 20) : 44;
@@ -448,7 +471,7 @@ const AdminLinesScreen = ({ navigation, route }) => {
           </View>
 
           <FlatList
-            data={[...persistedRoutes, ...builtinLines]}
+            data={[...persistedRoutes]}
             keyExtractor={i => i.id}
             renderItem={renderLine}
             style={{ marginTop: 12 }}
@@ -589,6 +612,66 @@ const AdminLinesScreen = ({ navigation, route }) => {
           </ScrollView>
         </KeyboardAvoidingView>
       )}
+
+      {/* Modal de detalles de ruta */}
+      <Modal visible={showRouteDetailsModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContainer, { maxHeight: '80%' }]}>
+            <Text style={styles.modalTitle}>
+              Detalles de la ruta: {selectedRouteForDetails?.name}
+            </Text>
+            
+            <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={true}>
+              {selectedRouteForDetails?.points && selectedRouteForDetails.points.length > 0 ? (
+                <>
+                  <Text style={[styles.modalLabel, { marginBottom: 10, fontSize: 14, fontWeight: '600' }]}>
+                    Puntos de la ruta ({selectedRouteForDetails.points.length})
+                  </Text>
+                  {selectedRouteForDetails.points.map((point, index) => (
+                    <View key={index} style={[styles.pointItem, { marginBottom: 8 }]}>
+                      <View style={[styles.smallCircle, { backgroundColor: selectedRouteForDetails.color || '#1976D2' }]}>
+                        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 12 }}>
+                          {index + 1}
+                        </Text>
+                      </View>
+                      <View style={{ marginLeft: 12, flex: 1 }}>
+                        <Text style={{ fontWeight: '600', fontSize: 14 }}>
+                          {point.name || `Punto ${index + 1}`}
+                        </Text>
+                        <Text style={{ color: '#666', fontSize: 12, marginTop: 2 }}>
+                          {point.street || 'Calle no especificada'}
+                        </Text>
+                        <Text style={{ color: '#888', fontSize: 10, marginTop: 1 }}>
+                          Lat: {point.latitude?.toFixed(5)}, Lng: {point.longitude?.toFixed(5)}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </>
+              ) : (
+                <View style={{ alignItems: 'center', padding: 20 }}>
+                  <Text style={{ color: '#666', fontSize: 14 }}>
+                    Esta ruta no tiene información detallada de puntos
+                  </Text>
+                  <Text style={{ color: '#999', fontSize: 12, marginTop: 5 }}>
+                    Solo contiene coordenadas básicas ({selectedRouteForDetails?.coordinates?.length || 0} puntos)
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+            
+            <View style={{ marginTop: 15 }}>
+              <TouchableOpacity 
+                style={[styles.saveButton, { backgroundColor: '#1976D2' }]} 
+                onPress={() => setShowRouteDetailsModal(false)}
+              >
+                <Text style={styles.saveButtonText}>Cerrar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 };

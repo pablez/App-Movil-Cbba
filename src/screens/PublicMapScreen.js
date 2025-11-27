@@ -22,6 +22,10 @@ const PublicMapScreen = ({ navigation, route }) => {
   const [mapRef, setMapRef] = useState(null);
   const insets = useSafeAreaInsets();
   const topOffset = (insets.top || 0) + 12;
+  
+  // Calcular espaciado dinámico para evitar superposición con bottom tabs
+  const TAB_BAR_HEIGHT = 70;
+  const BOTTOM_SPACING = TAB_BAR_HEIGHT + Math.max(insets.bottom, 16); // 16px mínimo de padding
 
   // Estados para selección de puntos y generación de rutas
   const [isSelectingPoints, setIsSelectingPoints] = useState(false);
@@ -177,7 +181,7 @@ const PublicMapScreen = ({ navigation, route }) => {
           }));
           setTimeout(() => {
             mapRef.fitToCoordinates(routeCoords, {
-              edgePadding: { top: 80, right: 50, bottom: 200, left: 50 },
+              edgePadding: { top: 80, right: 50, bottom: BOTTOM_SPACING + 100, left: 50 },
               animated: true,
             });
           }, 500);
@@ -253,7 +257,7 @@ const PublicMapScreen = ({ navigation, route }) => {
 
 
       {/* Mapa */}
-      <View style={styles.mapContainer}>
+      <View style={[styles.mapContainer, { paddingBottom: BOTTOM_SPACING }]}>
         {loading && !location ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#1976D2" />
@@ -366,7 +370,7 @@ const PublicMapScreen = ({ navigation, route }) => {
 
         {/* Panel de control para selección de puntos */}
         {isSelectingPoints && (
-          <View style={styles.selectionPanel}>
+          <View style={[styles.selectionPanel, { bottom: BOTTOM_SPACING + 80 }]}>
             <View style={styles.selectionHeader}>
               <View style={styles.animatedIcon}>
                 <Ionicons name="navigate-circle" size={24} color="#1976D2" />
@@ -421,7 +425,7 @@ const PublicMapScreen = ({ navigation, route }) => {
 
         {/* Indicador visual cuando está en modo selección */}
         {isSelectingPoints && (
-          <View style={styles.selectionOverlay}>
+          <View style={[styles.selectionOverlay, { bottom: BOTTOM_SPACING + 80 }]}>
             <Text style={styles.overlayText}>
               {!startPoint ? '📍 TOCA PARA SELECCIONAR ORIGEN' :
                !endPoint ? '📍 TOCA PARA SELECCIONAR DESTINO' :
@@ -431,7 +435,7 @@ const PublicMapScreen = ({ navigation, route }) => {
         )}
 
         {/* Botones flotantes */}
-        <View style={styles.mapButtons}>
+        <View style={[styles.mapButtons, { bottom: BOTTOM_SPACING + 16 }]}>
           {/* Botón principal para activar/desactivar selección de puntos */}
           <TouchableOpacity
             style={[styles.fab, styles.navigationFab, { 
@@ -724,7 +728,6 @@ const styles = StyleSheet.create({
   mapButtons: {
     position: 'absolute',
     right: 16,
-    bottom: 100, // Espacio para tab bar
     alignItems: 'center',
   },
   fab: {
@@ -804,7 +807,6 @@ const styles = StyleSheet.create({
   // Estilos para panel de selección
   selectionPanel: {
     position: 'absolute',
-    top: 80,
     left: 16,
     right: 16,
     backgroundColor: '#fff',
@@ -909,7 +911,6 @@ const styles = StyleSheet.create({
   // Indicador visual de superposición
   selectionOverlay: {
     position: 'absolute',
-    bottom: 180,
     left: 16,
     right: 16,
     backgroundColor: 'rgba(25, 118, 210, 0.9)',
