@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,224 +8,287 @@ import {
   TouchableOpacity,
   Platform,
   Alert,
-  Modal
+  Modal,
+  FlatList
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Polyline, Marker } from 'react-native-maps';
-import LocationService from '../services/LocationService';
+import MapWebView from '../components/MapWebView';
+import MapControls from '../components/MapControls';
+import SelectionPanel from '../components/SelectionPanel';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import usePublicMapLogic from '../hooks/usePublicMapLogic';
 
 const PublicMapScreen = ({ navigation, route }) => {
-  const [location, setLocation] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [mapRef, setMapRef] = useState(null);
+  const webViewRef = useRef(null);
   const insets = useSafeAreaInsets();
   const topOffset = (insets.top || 0) + 12;
   
   // Calcular espaciado dinámico para evitar superposición con bottom tabs
   const TAB_BAR_HEIGHT = 70;
-  const BOTTOM_SPACING = TAB_BAR_HEIGHT + Math.max(insets.bottom, 16); // 16px mínimo de padding
+  // Si ocultamos la tab bar en esta pantalla, no añadimos la altura extra
+  const HIDE_TAB_BAR = true;
+  const BOTTOM_SPACING = (HIDE_TAB_BAR ? Math.max(insets.bottom, 60) : TAB_BAR_HEIGHT + Math.max(insets.bottom, 16)); // Espacio para el tab bar integrado
 
-  // Estados para selección de puntos y generación de rutas
-  const [isSelectingPoints, setIsSelectingPoints] = useState(false);
-  const [startPoint, setStartPoint] = useState(null);
-  const [endPoint, setEndPoint] = useState(null);
-  const [generatedRoute, setGeneratedRoute] = useState(null);
-  const [routeLoading, setRouteLoading] = useState(false);
-  const [showRouteModal, setShowRouteModal] = useState(false);
-  
-  // Estado para el aviso de explorar sin cuenta
-  const [showGuestModal, setShowGuestModal] = useState(false);
+  const [notify, setNotify] = useState(null);
 
-  // Obtener la ruta pasada como parámetro
-  const customRoute = route?.params?.customRoute;
-
+  // Ocultar la barra inferior (tab bar) cuando este screen está activo.
+  // Esto elimina la superficie blanca que tapaba el contenido.
   useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const res = await LocationService.getCurrentLocation();
-        if (!mounted) return;
-        setLocation({ latitude: res.latitude, longitude: res.longitude });
-      } catch (err) {
-        if (!mounted) return;
-        setError(err.message || 'No se pudo obtener ubicación');
-      } finally {
-        if (!mounted) return;
-        setLoading(false);
+    const parents = [];
+    try {
+      let parent = navigation.getParent && navigation.getParent();
+      while (parent) {
+        try {
+          if (typeof parent.setOptions === 'function') {
+            parent.setOptions({ tabBarStyle: { display: 'none' } });
+            parents.push(parent);
+          }
+        } catch (err) {
+          // ignore
+        }
+        parent = parent.getParent && parent.getParent();
       }
-    })();
+    } catch (e) {
+      // non-fatal
+    }
 
-    return () => { mounted = false; };
+    // Al desmontar, restaurar la visibilidad del tab bar.
+    return () => {
+      try {
+        parents.forEach(p => {
+          try { p.setOptions({ tabBarStyle: { display: 'flex' } }); } catch (_) {}
+        });
+      } catch (e) {}
+    };
+  }, [navigation]);
+
+  const handleNotify = useCallback((payload) => {
+    setNotify(payload);
   }, []);
 
+  // auto-dismiss simple notifications (those without actions)
   useEffect(() => {
-    // Si hay una ruta personalizada y el mapa está listo, ajustar la vista
-    if (customRoute && customRoute.coordinates && mapRef) {
-      setTimeout(() => {
-        if (customRoute.coordinates.length > 0) {
-          const coords = customRoute.coordinates.map(coord => ({
-            latitude: coord[1],
-            longitude: coord[0]
-          }));
-          mapRef.fitToCoordinates(coords, {
-            edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-            animated: true,
-          });
-        }
-      }, 500);
+    if (!notify) return;
+    if (notify.duration && (!notify.actions || notify.actions.length === 0)) {
+      const t = setTimeout(() => setNotify(null), notify.duration);
+      return () => clearTimeout(t);
     }
-  }, [customRoute, mapRef]);
+  }, [notify]);
 
-  // Mostrar modal de bienvenida después de cargar
+  // Hook that centralizes map state & logic
+  const {
+    location,
+    loading,
+    error,
+    mapReady,
+    isSelectingPoints,
+    startPoint,
+    endPoint,
+    generatedRoute,
+    routeLoading,
+    showRouteModal,
+    showGuestModal,
+    customRoute,
+    polylineCoords,
+    initialRegion,
+    centerOnUser,
+    centerOnRoute,
+    updateLocationOnMap,
+    handleWebViewMessage,
+    togglePointSelection,
+    generateRoute,
+    clearRoute,
+    setShowGuestModal
+  } = usePublicMapLogic({ route, navigation, webViewRef, onNotify: handleNotify });
+
+  // `usePublicMapLogic` expone `showRouteModal` (valor) pero no su setter.
+  // Creamos un estado local sincronizado para poder abrir/cerrar el modal
+  // desde este componente sin causar un ReferenceError si el hook no expone
+  // `setShowRouteModal`.
+  const [showRouteModalState, setShowRouteModalState] = useState(!!showRouteModal);
   useEffect(() => {
-    if (!loading && !error) {
-      const timer = setTimeout(() => {
-        setShowGuestModal(true);
-      }, 2000); // Mostrar después de 2 segundos
+    setShowRouteModalState(!!showRouteModal);
+  }, [showRouteModal]);
 
-      return () => clearTimeout(timer);
-    }
-  }, [loading, error]);
+  // Exponemos `setShowRouteModal` local para mantener la API esperada
+  // en el resto del componente (se usan llamadas como setShowRouteModal(false)).
+  const setShowRouteModal = (value) => setShowRouteModalState(!!value);
 
-  const centerOnUser = async () => {
-    try {
-      setLoading(true);
-      const res = await LocationService.getCurrentLocation();
-      setLocation({ latitude: res.latitude, longitude: res.longitude });
-      if (mapRef) {
-        mapRef.animateToRegion({
-          latitude: res.latitude,
-          longitude: res.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01
-        }, 500);
-      }
-    } catch (err) {
-      setError(err.message || 'No se pudo centrar');
-    } finally {
-      setLoading(false);
-    }
+  // Modal para mostrar paradas de la línea
+  const [showStopsModal, setShowStopsModal] = useState(false);
+
+  const openStopsModal = () => {
+    console.log('🔄 Abriendo modal de paradas');
+    setShowStopsModal(true);
+  };
+  
+  const closeStopsModal = () => {
+    console.log('🔄 Cerrando modal de paradas');
+    setShowStopsModal(false);
   };
 
-  const centerOnRoute = () => {
-    if (customRoute && customRoute.coordinates && mapRef) {
-      const coords = customRoute.coordinates.map(coord => ({
-        latitude: coord[1],
-        longitude: coord[0]
-      }));
-      mapRef.fitToCoordinates(coords, {
-        edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-        animated: true,
-      });
+  // Resolver el nombre de la calle desde varias posibles propiedades del punto
+  const resolveStreet = (pt) => {
+    if (!pt) return '';
+    if (typeof pt === 'object') {
+      const props = pt.properties || {};
+      return (
+        pt.street || pt.address || pt.street_name || pt.via || pt.direccion || pt.avenue ||
+        props.street || props.address || props.street_name || props.via || props.direccion || ''
+      );
     }
+    return '';
   };
 
-  // Funciones para selección de puntos y generación de rutas
-  const togglePointSelection = () => {
-    setIsSelectingPoints(!isSelectingPoints);
-    if (isSelectingPoints) {
-      // Limpiar puntos al desactivar
-      setStartPoint(null);
-      setEndPoint(null);
-      setGeneratedRoute(null);
+  const resolveName = (pt) => {
+    if (!pt) return '';
+    if (typeof pt === 'object') {
+      const props = pt.properties || {};
+      return pt.name || pt.label || pt.title || props.name || props.label || '';
     }
+    return '';
   };
 
-  const handleMapPress = (event) => {
-    if (!isSelectingPoints) return;
+  // Resolver coordenadas desde varias posibles formas: [lng,lat], {latitude,longitude}, {lat,lng}, or coordinates array
+  const resolveCoords = (pt) => {
+    if (!pt) return null;
+    // If the point itself is an array [lng, lat]
+    if (Array.isArray(pt) && pt.length >= 2) return [pt[0], pt[1]];
+    if (typeof pt === 'object') {
+      if (Array.isArray(pt.coordinates) && pt.coordinates.length >= 2) return pt.coordinates;
+      if (Array.isArray(pt.coord) && pt.coord.length >= 2) return pt.coord;
+      if (typeof pt.longitude === 'number' && typeof pt.latitude === 'number') return [pt.longitude, pt.latitude];
+      if (typeof pt.lng === 'number' && typeof pt.lat === 'number') return [pt.lng, pt.lat];
+      // fallback to numeric index properties (older geojson-like entries)
+      if (typeof pt[0] === 'number' && typeof pt[1] === 'number') return [pt[0], pt[1]];
+    }
+    return null;
+  };
 
-    const coordinate = event.nativeEvent.coordinate;
+  const handleShowStopOnMap = (stop, idx) => {
+    if (!stop) return;
     
-    if (!startPoint) {
-      setStartPoint(coordinate);
-      Alert.alert(
-        'Punto de inicio seleccionado',
-        'Ahora toca en el mapa para seleccionar el punto de destino',
-        [{ text: 'OK' }]
-      );
-    } else if (!endPoint) {
-      setEndPoint(coordinate);
-      Alert.alert(
-        'Punto de destino seleccionado',
-        '¿Deseas generar la ruta entre estos dos puntos?',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Generar Ruta', onPress: () => generateRoute(startPoint, coordinate) }
-        ]
-      );
-    }
-  };
-
-  const generateRoute = async (start, end) => {
-    setRouteLoading(true);
+    // Debug: log the actual stop object being processed
     try {
-      console.log('🛣️ Generando ruta...', { start, end });
-      
-      const routeResult = await LocationService.getOptimalRoute(
-        { latitude: start.latitude, longitude: start.longitude },
-        { latitude: end.latitude, longitude: end.longitude },
-        'driving-car'
-      );
-
-      if (routeResult.success) {
-        setGeneratedRoute(routeResult);
-        setShowRouteModal(true);
-        
-        // Ajustar vista del mapa a la ruta generada
-        if (mapRef && routeResult.coordinates && routeResult.coordinates.length > 0) {
-          const routeCoords = routeResult.coordinates.map(coord => ({
-            latitude: coord[1],
-            longitude: coord[0]
-          }));
-          setTimeout(() => {
-            mapRef.fitToCoordinates(routeCoords, {
-              edgePadding: { top: 80, right: 50, bottom: BOTTOM_SPACING + 100, left: 50 },
-              animated: true,
-            });
-          }, 500);
-        }
-      } else {
-        Alert.alert(
-          'Error al generar ruta',
-          routeResult.error || 'No se pudo calcular la ruta',
-          [{ text: 'OK' }]
-        );
-      }
-    } catch (error) {
-      Alert.alert(
-        'Error',
-        'Error al generar la ruta: ' + error.message,
-        [{ text: 'OK' }]
-      );
-    } finally {
-      setRouteLoading(false);
+      console.log(`🎯 Processing stop ${idx}:`, JSON.stringify(stop, null, 2));
+    } catch (e) {
+      console.log(`🎯 Processing stop ${idx}:`, stop);
     }
+    
+    const coords = resolveCoords(stop);
+    const lng = coords && coords.length >= 1 ? coords[0] : (stop.longitude ?? stop.lng ?? null);
+    const lat = coords && coords.length >= 2 ? coords[1] : (stop.latitude ?? stop.lat ?? null);
+    if (lat == null || lng == null) return;
+
+    // Extraer nombre y número de punto, usando helpers que buscan en properties y campos anidados
+    let nameStr = resolveName(stop);
+    const numMatch = String(nameStr).match(/(\d+)/);
+    const pointNumber = numMatch ? numMatch[1] : (typeof idx === 'number' ? String(idx + 1) : null);
+
+    const street = resolveStreet(stop);
+
+    const rawStreet = stop && (stop.street ?? stop.address ?? stop.direccion ?? (stop.properties && (stop.properties.street ?? stop.properties.address ?? stop.properties.direccion)) ?? null);
+
+    // If name or street are missing on the stop object, try to pull them from the customRoute arrays
+    if ((!nameStr || nameStr === '') || (!street || street === '')) {
+      try {
+        const candidate = (customRoute && customRoute.stops && customRoute.stops[idx]) || (customRoute && customRoute.points && customRoute.points[idx]);
+        if (candidate) {
+          if (!nameStr || nameStr === '') {
+            nameStr = resolveName(candidate) || nameStr;
+          }
+          if (!street || street === '') {
+            const candStreet = resolveStreet(candidate) || (candidate.street ?? candidate.address ?? candidate.direccion ?? '');
+            if (candStreet) {
+              // prefer candidate street if stop doesn't have it
+              street = candStreet;
+            }
+          }
+          // also prefer rawStreet from candidate if ours empty
+          if (!rawStreet || rawStreet === '') {
+            const candRaw = candidate.street ?? candidate.address ?? candidate.direccion ?? (candidate.properties && (candidate.properties.street ?? candidate.properties.address ?? candidate.properties.direccion)) ?? null;
+            if (candRaw) rawStreet = candRaw;
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // Construir descripción que muestra calle/avenida y el número de punto
+    let description = '';
+    if (street) description += street;
+    if (pointNumber) description += (description ? ' · ' : '') + `Punto ${pointNumber}`;
+
+    if (webViewRef && webViewRef.current && typeof webViewRef.current.postCommand === 'function') {
+      webViewRef.current.postCommand({ type: 'updateLocation', latitude: lat, longitude: lng, force: true });
+      // ensure map isn't following user so the stop is centered
+      webViewRef.current.postCommand({ type: 'setFollowUser', follow: false });
+      // send richer popup payload so WebView can show street, name, coordinates and lat/lng
+      const popupPayload = {
+        type: 'showPopup',
+        popup: {
+          latitude: lat,
+          longitude: lng,
+          title: nameStr || 'Parada',
+          description,
+          meta: {
+            street: street || '',
+            rawStreet: rawStreet || '',
+            name: nameStr || '',
+            coordinates: coords || [lng, lat],
+            latitude: lat,
+            longitude: lng
+          }
+        }
+      };
+
+      // Debug log: show what RN is sending to the WebView
+      try { console.log('RN -> WebView showPopup payload:', popupPayload); } catch (e) {}
+      webViewRef.current.postCommand(popupPayload);
+    }
+    closeStopsModal();
   };
 
-  const clearRoute = () => {
-    setStartPoint(null);
-    setEndPoint(null);
-    setGeneratedRoute(null);
-    setShowRouteModal(false);
-  };
+    // HTML generado para el WebView se encuentra en ../components/MapHTML
 
-  // Preparar coordenadas para el polyline
-  const polylineCoords = customRoute && customRoute.coordinates 
-    ? customRoute.coordinates.map(coord => ({
-        latitude: coord[1],
-        longitude: coord[0]
-      }))
-    : [];
-
-  // Coordenadas iniciales del mapa
-  const initialRegion = {
-    latitude: location ? location.latitude : -17.3895,
-    longitude: location ? location.longitude : -66.1568,
-    latitudeDelta: 0.05,
-    longitudeDelta: 0.05
-  };
+  // initialRegion proviene de usePublicMapLogic
+  // Normalizar una lista de paradas que puede venir en varias formas:
+  // - customRoute.stops (ya estructurada)
+  // - customRoute.points (Firestore naming)
+  // - customRoute.coordinates (array de [lng,lat])
+  const stopsData = (() => {
+    try {
+      console.log('🔍 customRoute debug:', JSON.stringify(customRoute, null, 2));
+    } catch (e) {
+      console.log('🔍 customRoute exists:', !!customRoute);
+    }
+    
+    if (!customRoute) return polylineCoords;
+    
+    // Priorizar customRoute.points que parece ser la estructura de Firestore
+    if (customRoute.points && Array.isArray(customRoute.points) && customRoute.points.length > 0) {
+      console.log('📍 Using customRoute.points:', customRoute.points.length, 'items');
+      return customRoute.points;
+    }
+    
+    if (customRoute.stops && Array.isArray(customRoute.stops) && customRoute.stops.length > 0) {
+      console.log('📍 Using customRoute.stops:', customRoute.stops.length, 'items');
+      return customRoute.stops;
+    }
+    
+    if (customRoute.coordinates && Array.isArray(customRoute.coordinates) && customRoute.coordinates.length > 0) {
+      console.log('📍 Using customRoute.coordinates, mapping to objects');
+      return customRoute.coordinates.map((c, i) => ({
+        coordinates: c,
+        longitude: c[0],
+        latitude: c[1],
+        name: `Parada ${i + 1}`,
+        street: ''
+      }));
+    }
+    
+    console.log('📍 Fallback to polylineCoords:', polylineCoords.length, 'items');
+    return polylineCoords;
+  })();
 
   return (
     <SafeAreaView style={styles.container}>
@@ -239,18 +302,30 @@ const PublicMapScreen = ({ navigation, route }) => {
         <Ionicons name="arrow-back" size={24} color="#fff" />
       </TouchableOpacity>
 
-      {/* Título de la ruta si existe */}
+      {/* Encabezado superior de la línea (full-width) */}
       {customRoute && (
-        <View style={[styles.routeInfo, { top: topOffset + 70 }]}>
-          <View style={styles.routeHeader}>
+        <View style={[styles.routeTopHeader, { top: topOffset }]}>
+          <View style={styles.routeTopInner}>
             <View style={[styles.routeColorSwatch, { backgroundColor: customRoute.color || '#1976D2' }]} />
-            <Text style={styles.routeTitle}>{customRoute.name || 'Ruta sin nombre'}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.routeTopTitle}>{customRoute.name ? `Línea ${customRoute.name}` : 'Línea sin nombre'}</Text>
+              {polylineCoords.length > 0 ? (
+                <Text style={styles.routeTopSubtitle}>{polylineCoords.length} paradas aprox.</Text>
+              ) : null}
+            </View>
+
+            <TouchableOpacity 
+              style={styles.viewStopsBtn} 
+              onPress={() => {
+                console.log('🚌 Botón Ver paradas presionado');
+                openStopsModal();
+              }} 
+              activeOpacity={0.7}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Text style={styles.viewStopsText}>Ver paradas</Text>
+            </TouchableOpacity>
           </View>
-          {polylineCoords.length > 0 && (
-            <Text style={styles.routeSubtitle}>
-              {polylineCoords.length} puntos en la ruta
-            </Text>
-          )}
         </View>
       )}
 
@@ -258,7 +333,7 @@ const PublicMapScreen = ({ navigation, route }) => {
 
       {/* Mapa */}
       <View style={[styles.mapContainer, { paddingBottom: BOTTOM_SPACING }]}>
-        {loading && !location ? (
+        {loading && !mapReady ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#1976D2" />
             <Text style={styles.loadingText}>Cargando mapa...</Text>
@@ -268,235 +343,130 @@ const PublicMapScreen = ({ navigation, route }) => {
             <Ionicons name="location-outline" size={48} color="#999" />
             <Text style={styles.errorText}>{error}</Text>
           </View>
-        ) : (
-          <MapView
-            ref={setMapRef}
+          ) : (
+          <MapWebView
+            ref={webViewRef}
             style={styles.map}
-            initialRegion={initialRegion}
-            showsUserLocation={true}
-            showsMyLocationButton={Platform.OS === 'android'}
-            followsUserLocation={false}
-            onPress={handleMapPress}
-          >
-            {/* Marcador de ubicación del usuario */}
-            {location && (
-              <Marker
-                coordinate={{
-                  latitude: location.latitude,
-                  longitude: location.longitude
-                }}
-                title="Tu ubicación"
-                description="Ubicación actual"
-                pinColor="#4CAF50"
-              />
-            )}
+            onMessage={handleWebViewMessage}
+            initialLocation={location}
+          />
+        )}
 
-            {/* Marcadores de puntos seleccionados */}
-            {startPoint && (
-              <Marker
-                coordinate={startPoint}
-                title="Punto de inicio"
-                description="Toca para seleccionar destino"
-                pinColor="#2196F3"
-              >
-                <View style={styles.customMarker}>
-                  <Ionicons name="location" size={30} color="#2196F3" />
-                  <Text style={styles.markerText}>A</Text>
+        {/* Inline notification (pleasant UX) */}
+        {notify && (
+          <View style={[styles.notifyContainer, { top: topOffset + 60 }]}> 
+            <View style={styles.notifyInner}>
+              <Ionicons name={notify.type === 'confirm' ? 'help-circle' : 'checkmark-circle'} size={20} color="#fff" style={{ marginRight: 8 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.notifyTitle}>{notify.title}</Text>
+                {notify.message ? <Text style={styles.notifyMessage}>{notify.message}</Text> : null}
+                {/* If we received prev/new coordinates show a compact comparison */}
+                {notify.prevStart || notify.newStart ? (
+                  <View style={styles.compareBox}>
+                    {notify.prevStart ? (
+                      <View style={styles.compareRow}>
+                        <Text style={styles.compareLabel}>Antiguo:</Text>
+                        <Text style={styles.compareValue}>{notify.prevStart.latitude.toFixed(5)}, {notify.prevStart.longitude.toFixed(5)}</Text>
+                        <TouchableOpacity style={styles.compareShowBtn} onPress={() => {
+                          if (webViewRef && webViewRef.current && typeof webViewRef.current.postCommand === 'function') {
+                            webViewRef.current.postCommand({ type: 'updateLocation', latitude: notify.prevStart.latitude, longitude: notify.prevStart.longitude, force: true });
+                          }
+                        }}>
+                          <Text style={styles.compareShowText}>Mostrar</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+                    {notify.newStart ? (
+                      <View style={styles.compareRow}>
+                        <Text style={styles.compareLabel}>Actual:</Text>
+                        <Text style={styles.compareValue}>{notify.newStart.latitude.toFixed(5)}, {notify.newStart.longitude.toFixed(5)}</Text>
+                        <TouchableOpacity style={styles.compareShowBtn} onPress={() => {
+                          if (webViewRef && webViewRef.current && typeof webViewRef.current.postCommand === 'function') {
+                            webViewRef.current.postCommand({ type: 'updateLocation', latitude: notify.newStart.latitude, longitude: notify.newStart.longitude, force: true });
+                          }
+                        }}>
+                          <Text style={styles.compareShowText}>Mostrar</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
+              </View>
+              {notify.actions && notify.actions.length > 0 ? (
+                <View style={styles.notifyActions}>
+                  {notify.actions.map((a, idx) => (
+                    <TouchableOpacity key={idx} style={styles.notifyBtn} onPress={() => { a.onPress && a.onPress(); setNotify(null); }}>
+                      <Text style={styles.notifyBtnText}>{a.label}</Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
-              </Marker>
-            )}
-            
-            {endPoint && (
-              <Marker
-                coordinate={endPoint}
-                title="Punto de destino"
-                description="Destino seleccionado"
-                pinColor="#FF5722"
-              >
-                <View style={styles.customMarker}>
-                  <Ionicons name="location" size={30} color="#FF5722" />
-                  <Text style={styles.markerText}>B</Text>
-                </View>
-              </Marker>
-            )}
-
-            {/* Polyline de la ruta generada */}
-            {generatedRoute && generatedRoute.coordinates && (
-              <Polyline
-                coordinates={generatedRoute.coordinates.map(coord => ({
-                  latitude: coord[1],
-                  longitude: coord[0]
-                }))}
-                strokeColor="#FF5722"
-                strokeWidth={5}
-                lineCap="round"
-                lineJoin="round"
-                lineDashPattern={[10, 5]}
-              />
-            )}
-
-            {/* Polyline de la ruta original si existe */}
-            {polylineCoords.length > 0 && (
-              <Polyline
-                coordinates={polylineCoords}
-                strokeColor={customRoute.color || '#1976D2'}
-                strokeWidth={4}
-                lineCap="round"
-                lineJoin="round"
-              />
-            )}
-
-            {/* Marcadores de inicio y fin de ruta original */}
-            {polylineCoords.length > 0 && (
-              <>
-                <Marker
-                  coordinate={polylineCoords[0]}
-                  title="Inicio de ruta"
-                  description={customRoute.name || 'Ruta'}
-                  pinColor="#4CAF50"
-                />
-                {polylineCoords.length > 1 && (
-                  <Marker
-                    coordinate={polylineCoords[polylineCoords.length - 1]}
-                    title="Fin de ruta"
-                    description={customRoute.name || 'Ruta'}
-                    pinColor="#F44336"
-                  />
-                )}
-              </>
-            )}
-          </MapView>
+              ) : null}
+            </View>
+          </View>
         )}
 
         {/* Panel de control para selección de puntos */}
         {isSelectingPoints && (
-          <View style={[styles.selectionPanel, { bottom: BOTTOM_SPACING + 80 }]}>
-            <View style={styles.selectionHeader}>
-              <View style={styles.animatedIcon}>
-                <Ionicons name="navigate-circle" size={24} color="#1976D2" />
-              </View>
-              <View style={styles.selectionTitleContainer}>
-                <Text style={styles.selectionTitle}>
-                  {!startPoint ? '👆 Toca en el mapa para seleccionar ORIGEN' : 
-                   !endPoint ? '👆 Toca en el mapa para seleccionar DESTINO' : 
-                   '✅ Puntos seleccionados - Genera la ruta'}
-                </Text>
-                <Text style={styles.selectionSubtitle}>
-                  {!startPoint ? 'Paso 1 de 2' : 
-                   !endPoint ? 'Paso 2 de 2' : 
-                   'Listo para generar'}
-                </Text>
-              </View>
-            </View>
-            
-            <View style={styles.selectionStatus}>
-              <View style={[styles.statusItem, startPoint && styles.statusItemActive]}>
-                <View style={[styles.statusDot, { backgroundColor: startPoint ? '#2196F3' : '#ccc' }]} />
-                <Text style={[styles.statusText, startPoint && styles.statusTextActive]}>
-                  Origen {startPoint ? '✓' : '(pendiente)'}
-                </Text>
-              </View>
-              <View style={[styles.statusItem, endPoint && styles.statusItemActive]}>
-                <View style={[styles.statusDot, { backgroundColor: endPoint ? '#FF5722' : '#ccc' }]} />
-                <Text style={[styles.statusText, endPoint && styles.statusTextActive]}>
-                  Destino {endPoint ? '✓' : '(pendiente)'}
-                </Text>
-              </View>
-            </View>
-            
-            {startPoint && endPoint && !routeLoading && (
-              <TouchableOpacity 
-                style={styles.generateRouteBtn}
-                onPress={() => generateRoute(startPoint, endPoint)}
-              >
-                <Ionicons name="map-outline" size={18} color="#fff" />
-                <Text style={styles.generateRouteBtnText}>🛣️ Generar Ruta Personalizada</Text>
-              </TouchableOpacity>
-            )}
-
-            {routeLoading && (
-              <View style={styles.routeLoadingContainer}>
-                <ActivityIndicator size="small" color="#1976D2" />
-                <Text style={styles.routeLoadingText}>🔄 Calculando la mejor ruta...</Text>
-              </View>
-            )}
-          </View>
+          <SelectionPanel
+            startPoint={startPoint}
+            endPoint={endPoint}
+            routeLoading={routeLoading}
+            onGenerateRoute={generateRoute}
+            // Subimos el panel para que quede más visible y no se solape
+            style={{ bottom: BOTTOM_SPACING + 560 }}
+          />
         )}
 
         {/* Indicador visual cuando está en modo selección */}
         {isSelectingPoints && (
-          <View style={[styles.selectionOverlay, { bottom: BOTTOM_SPACING + 80 }]}>
-            <Text style={styles.overlayText}>
-              {!startPoint ? '📍 TOCA PARA SELECCIONAR ORIGEN' :
-               !endPoint ? '📍 TOCA PARA SELECCIONAR DESTINO' :
-               '✅ AMBOS PUNTOS SELECCIONADOS'}
-            </Text>
-          </View>
+          // Ajuste fino: subimos un poco el overlay para evitar solapamiento
+          // con el panel de selección manteniéndolos visualmente cercanos.
+            // Evitar solapamiento: colocamos el overlay aún más arriba.
+            <View style={[styles.selectionOverlay, { bottom: BOTTOM_SPACING + 700 }]}> 
+              <View style={styles.overlayContent}>
+                <Ionicons name="location-sharp" size={20} color="#fff" style={{ marginRight: 10 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.overlayTitle}>
+                    {!startPoint ? 'Toca en el mapa para seleccionar el ORIGEN' :
+                     !endPoint ? 'Toca en el mapa para seleccionar el DESTINO' :
+                     '✅ Ambos puntos seleccionados'}
+                  </Text>
+                  {(!startPoint || !endPoint) && (
+                    <Text style={styles.overlaySubtitle}>
+                      {!startPoint ? 'Pulsa sobre tu ubicación de inicio.' : 'Pulsa sobre el punto de destino.'}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </View>
         )}
 
-        {/* Botones flotantes */}
-        <View style={[styles.mapButtons, { bottom: BOTTOM_SPACING + 16 }]}>
-          {/* Botón principal para activar/desactivar selección de puntos */}
-          <TouchableOpacity
-            style={[styles.fab, styles.navigationFab, { 
-              backgroundColor: isSelectingPoints ? '#FF5722' : '#1976D2',
-              width: isSelectingPoints ? 48 : 60,
-              height: isSelectingPoints ? 48 : 60,
-              marginBottom: 12
-            }]}
-            onPress={togglePointSelection}
-            activeOpacity={0.85}
-          >
-            {isSelectingPoints ? (
-              <Ionicons name="close" size={24} color="#fff" />
-            ) : (
-              <View style={styles.navigationIcon}>
-                <Ionicons name="navigate" size={24} color="#fff" />
-                <Text style={styles.navigationLabel}>RUTAS</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-
-          {/* Botón para limpiar ruta generada */}
-          {(startPoint || endPoint || generatedRoute) && (
-            <TouchableOpacity
-              style={[styles.fab, { backgroundColor: '#f44336', marginBottom: 12 }]}
-              onPress={clearRoute}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="trash-outline" size={20} color="#fff" />
-            </TouchableOpacity>
-          )}
-
-          {/* Botón para centrar en usuario */}
-          <TouchableOpacity
-            style={styles.fab}
-            onPress={centerOnUser}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="locate" size={20} color="#fff" />
-          </TouchableOpacity>
-
-          {/* Botón para centrar en ruta */}
-          {customRoute && polylineCoords.length > 0 && (
-            <TouchableOpacity
-              style={[styles.fab, { backgroundColor: customRoute.color || '#1976D2', marginTop: 12 }]}
-              onPress={centerOnRoute}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="map" size={20} color="#fff" />
-            </TouchableOpacity>
-          )}
-
-          {/* Botón para mostrar opciones de cuenta */}
-          <TouchableOpacity
-            style={[styles.fab, { backgroundColor: '#4CAF50', marginTop: 12 }]}
-            onPress={() => setShowGuestModal(true)}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="person" size={18} color="#fff" />
-          </TouchableOpacity>
+        {/* Botones flotantes (mejor posicionados) */}
+        <View style={[styles.mapControlsWrapper, { bottom: BOTTOM_SPACING + 260}]}>
+          <MapControls
+            isSelectingPoints={isSelectingPoints}
+            onToggleSelect={togglePointSelection}
+            onClearRoute={clearRoute}
+            onCenterUser={() => {
+              // Al centrar manualmente, reactivamos el seguimiento
+              if (webViewRef && webViewRef.current && typeof webViewRef.current.postCommand === 'function') {
+                webViewRef.current.postCommand({ type: 'setFollowUser', follow: true });
+              }
+              centerOnUser(); // This already sends updateLocation
+            }}
+            onCenterRoute={() => {
+              // cuando centramos en ruta, desactivamos el seguimiento para permitir exploración
+              if (webViewRef && webViewRef.current && typeof webViewRef.current.postCommand === 'function') {
+                webViewRef.current.postCommand({ type: 'setFollowUser', follow: false });
+              }
+              centerOnRoute();
+            }}
+            onOpenGuest={() => setShowGuestModal(true)}
+            customRoute={customRoute}
+            hasGeneratedRoute={!!(startPoint || endPoint || generatedRoute)}
+          />
         </View>
+        
       </View>
 
       {/* Modal de aviso para usuarios invitados */}
@@ -572,9 +542,65 @@ const PublicMapScreen = ({ navigation, route }) => {
         </TouchableOpacity>
       </Modal>
 
+      {/* Modal: Lista de paradas de la línea */}
+      <Modal
+        visible={showStopsModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={closeStopsModal}
+        statusBarTranslucent={true}
+      >
+        <View style={styles.stopsModalOverlay}>
+          <View style={styles.stopsModalContent}>
+            <View style={styles.stopsModalHeader}>
+              <Text style={styles.stopsModalTitle}>Paradas de la línea</Text>
+              <TouchableOpacity onPress={closeStopsModal} style={styles.stopsModalClose}>
+                <Ionicons name="close" size={20} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            <FlatList
+              data={stopsData}
+              keyExtractor={(item, idx) => (item.id ? String(item.id) : (item.name ? String(item.name) : String(idx)))}
+              renderItem={({ item, index }) => {
+                  const label = item.name || item.label || `Parada ${index + 1}`;
+                  const coordsFromItem = resolveCoords(item) || (Array.isArray(item.coordinates) ? item.coordinates : null);
+                  const lng = coordsFromItem && coordsFromItem.length >= 1 ? coordsFromItem[0] : (item.longitude ?? item.lng ?? null);
+                  const lat = coordsFromItem && coordsFromItem.length >= 2 ? coordsFromItem[1] : (item.latitude ?? item.lat ?? null);
+                  // extraer número de punto si viene en el nombre
+                  const numMatch = String(label).match(/(\d+)/);
+                  const pointNumber = numMatch ? numMatch[1] : String(index + 1);
+                  const street = resolveStreet(item);
+                  const rawStreet = item && (item.street ?? item.address ?? item.direccion ?? null);
+                  // Formatear la representación de las coordenadas
+                  const coordsText = coordsFromItem ? `[${coordsFromItem[0]}, ${coordsFromItem[1]}]` : (Array.isArray(item.coordinates) ? JSON.stringify(item.coordinates) : null);
+                      return (
+                        <TouchableOpacity activeOpacity={0.8} onPress={() => handleShowStopOnMap(item, index)} style={styles.stopRow}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.stopLabel}>{label} {pointNumber ? `· Nº ${pointNumber}` : ''}</Text>
+                            {street ? <Text style={[styles.stopCoord, { color: '#444' }]}>{street}</Text> : null}
+                            {rawStreet ? <Text style={[styles.stopCoord, { color: '#666', fontStyle: 'italic' }]}>Atributo 'street': {rawStreet}</Text> : null}
+                            {coordsText ? <Text style={[styles.stopCoord, { color: '#666' }]}>Coords: {coordsText}</Text> : null}
+                            {lat != null && lng != null ? (
+                              <Text style={styles.stopCoord}>Lat: {lat.toFixed(6)}  •  Lng: {lng.toFixed(6)}</Text>
+                            ) : null}
+                          </View>
+                          <TouchableOpacity style={styles.stopShowBtn} onPress={() => handleShowStopOnMap(item, index)}>
+                            <Text style={styles.stopShowText}>Mostrar</Text>
+                          </TouchableOpacity>
+                        </TouchableOpacity>
+                      );
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Tab bar hidden for this screen — no spacer needed */}
+
       {/* Modal de información de ruta */}
       <Modal
-        visible={showRouteModal}
+        visible={showRouteModalState}
         transparent={true}
         animationType="slide"
         onRequestClose={() => setShowRouteModal(false)}
@@ -701,6 +727,115 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 4,
     marginLeft: 24,
+  },
+  // Nuevo: encabezado superior de la línea
+  routeTopHeader: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    elevation: 6,
+    zIndex: 1100,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 6,
+  },
+  routeTopInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  routeTopTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#222',
+  },
+  routeTopSubtitle: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  viewStopsBtn: {
+    backgroundColor: '#FF5722',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginLeft: 12,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    minWidth: 100,
+    alignItems: 'center',
+  },
+  viewStopsText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
+  // Modal paradas
+  stopsModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  stopsModalContent: {
+    width: '100%',
+    maxWidth: 520,
+    maxHeight: '80%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 12,
+    elevation: 10,
+  },
+  stopsModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  stopsModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    flex: 1,
+    color: '#222',
+  },
+  stopsModalClose: {
+    padding: 8,
+  },
+  stopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  stopLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333',
+  },
+  stopCoord: {
+    fontSize: 12,
+    color: '#777',
+    marginTop: 4,
+  },
+  stopShowBtn: {
+    backgroundColor: '#E3F2FD',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginLeft: 12,
+  },
+  stopShowText: {
+    color: '#1976D2',
+    fontWeight: '700',
   },
   mapContainer: {
     flex: 1,
@@ -916,15 +1051,127 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(25, 118, 210, 0.9)',
     paddingVertical: 12,
     paddingHorizontal: 16,
-    borderRadius: 25,
+    borderRadius: 28,
     alignItems: 'center',
-    elevation: 8,
+    elevation: 10,
+    zIndex: 1100,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+  },
+  overlayContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  overlayTitle: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+    lineHeight: 18,
+  },
+  overlaySubtitle: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 12,
+    marginTop: 2,
   },
   overlayText: {
     color: '#fff',
     fontWeight: '700',
     fontSize: 14,
     textAlign: 'center',
+  },
+
+  // Inline notification styles
+  notifyContainer: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    zIndex: 1200,
+    alignItems: 'center',
+  },
+  notifyInner: {
+    backgroundColor: '#1976D2',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 3 },
+    shadowRadius: 6,
+  },
+  notifyTitle: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  notifyMessage: {
+    color: 'rgba(255,255,255,0.95)',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  notifyActions: {
+    marginLeft: 8,
+    flexDirection: 'row',
+  },
+  notifyBtn: {
+    marginLeft: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.12)'
+  },
+  notifyBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  compareBox: {
+    marginTop: 8,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    padding: 8,
+    borderRadius: 8,
+  },
+  compareRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  compareLabel: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 12,
+    fontWeight: '700',
+    marginRight: 8,
+    width: 70,
+  },
+  compareValue: {
+    color: 'rgba(255,255,255,0.95)',
+    fontSize: 12,
+    flex: 1,
+  },
+  compareShowBtn: {
+    marginLeft: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.12)'
+  },
+  compareShowText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+
+  // Wrapper para controlar la posición de los botones flotantes
+  mapControlsWrapper: {
+    position: 'absolute',
+    right: 16,
+    zIndex: 1000,
+    elevation: 10,
+    alignItems: 'flex-end',
   },
 
   // Estilos para modal de invitado

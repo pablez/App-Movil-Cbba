@@ -124,7 +124,28 @@ const PublicRoutesScreen = ({ navigation }) => {
       }
     }
     
-    navigation.navigate('PublicMap', { customRoute: { coordinates: coords, color: r.color, name: r.name } });
+    // Navegar al tab 'Mapa' dentro del stack de tabs para mantener la barra inferior visible
+    // Usamos el stack principal `MainTabs` y pasamos params al screen `Mapa`.
+    // IMPORTANTE: Incluir TODOS los campos de Firebase, especialmente 'points' con info detallada de paradas
+    navigation.navigate('MainTabs', { 
+      screen: 'Mapa', 
+      params: { 
+        customRoute: { 
+          coordinates: coords, 
+          color: r.color, 
+          name: r.name,
+          // Incluir todos los campos adicionales de Firebase
+          points: r.points || [], // Array con name, street, latitude, longitude de cada parada
+          stops: r.stops || [],   // Fallback por si usa 'stops' en lugar de 'points'
+          totalPoints: r.totalPoints,
+          public: r.public,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+          // Preservar cualquier otro campo que pueda tener la ruta
+          ...r
+        } 
+      } 
+    });
   };
 
   const fetchAllRoutesDebug = async () => {

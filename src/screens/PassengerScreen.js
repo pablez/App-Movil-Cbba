@@ -13,7 +13,10 @@ import {
   AppState
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-// Usamos LocationService (OpenRouteService wrapper) para obtener ubicación y dirección
+// 🗺️ USANDO OPENROUTESERVICE COMPLETO:
+// - Mapa visual: OpenLayers + OpenRouteService tiles
+// - Servicios: LocationService (OpenRouteService API wrapper)
+// - Geocodificación, routing y ubicación: OpenRouteService
 import LocationService from '../services/LocationService';
 import { doc, getDoc } from 'firebase/firestore';
 import { LocationService as FirestoreLocationService } from '../services/firestoreService';
@@ -431,17 +434,18 @@ const PassengerScreen = () => {
                     maxZoom: 18
                 });
                 
-                // Crear fuente OSM
-                console.log('🌍 Creando fuente OSM...');
-                var osmSource = new ol.source.OSM({
-                    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    crossOrigin: 'anonymous'
+                // Crear fuente OpenRouteService (tiles oficiales)
+                console.log('🌍 Creando fuente OpenRouteService...');
+                var orsSource = new ol.source.XYZ({
+                    url: 'https://maps.openrouteservice.org/tiles/{z}/{x}/{y}.png',
+                    crossOrigin: 'anonymous',
+                    attributions: '© <a href="https://openrouteservice.org/">OpenRouteService</a> | © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
                 });
                 
                 // Crear capas
                 console.log('📋 Creando capas...');
                 var tileLayer = new ol.layer.Tile({
-                    source: osmSource
+                    source: orsSource
                 });
                 
                 var passengerLayer = new ol.layer.Vector({ 

@@ -2,11 +2,26 @@ import * as Location from 'expo-location';
 
 /**
  * Servicio de OpenRouteService para geocodificación y búsqueda de ubicaciones
+ * 
+ * CONFIGURACIÓN ACTUAL: API Pública OpenRouteService
+ * - Límite: 2000 requests/día
+ * - Endpoints: Geocoding, Routing, Isochrones, Matrix
+ * 
+ * MIGRACIÓN FUTURA: Para producción se puede usar instancia local
+ * - Sin límites de requests
+ * - Mayor velocidad
+ * - Datos personalizados de Bolivia
+ * - Instrucciones en: /OPENROUTE_LOCAL_SETUP.md
+ * 
  * API Key: eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjliYzhiZDJmY2RjMTQxNzRhZGRkM2UyZDUyNWRhYmJiIiwiaCI6Im11cm11cjY0In0=
  */
 
+// 🌐 CONFIGURACIÓN DE ENDPOINTS
+// Para migrar a instancia local, cambiar BASE_URL a: 'http://localhost:8080/ors'
 const API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjliYzhiZDJmY2RjMTQxNzRhZGRkM2UyZDUyNWRhYmJiIiwiaCI6Im11cm11cjY0In0=';
-const BASE_URL = 'https://api.openrouteservice.org';
+const BASE_URL = 'https://api.openrouteservice.org'; // API Pública
+// const BASE_URL = 'http://localhost:8080/ors'; // ⬅ Para instancia local (futuro)
+// const API_KEY = null; // ⬅ No necesario en instancia local
 
 
 // Configuración para Cochabamba, Bolivia
@@ -644,6 +659,66 @@ class LocationService {
              Math.sin(dLng/2) * Math.sin(dLng/2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     return R * c;
+  }
+
+  /**
+   * 🆕 Calcula isócronas: área alcanzable en un tiempo determinado
+   * Útil para mostrar zonas de cobertura de rutas de transporte
+   * @param {Object} center - Punto central {latitude, longitude}
+   * @param {Array} timeRanges - Rangos de tiempo en segundos [300, 600, 900] = [5min, 10min, 15min]
+   * @param {String} profile - 'driving-car', 'foot-walking', 'cycling-regular'
+   * @returns {Object} Polígonos de isócronas para mostrar en el mapa
+   */
+  static async getIsochrones(center, timeRanges = [600, 1200], profile = 'driving-car') {
+    try {
+      console.log('🌐 Calculando isócronas:', { center, timeRanges, profile });
+
+      const url = `${BASE_URL}/v2/isochrones/${profile}`;
+      
+      const requestBody = {
+        locations: [[center.longitude, center.latitude]],
+        range: timeRanges,
+        range_type: 'time', // tiempo en segundos
+        units: 'km',
+        location_type: 'start',
+        smoothing: 0.9
+      };
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': API_KEY,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Error isócronas: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (!data.features || data.features.length === 0) {
+        throw new Error('No se pudieron calcular las isócronas');
+      }
+
+      const isochrones = data.features.map(feature => ({
+        timeRange: feature.properties.value, // tiempo en segundos
+        timeMinutes: Math.round(feature.properties.value / 60),
+        coordinates: feature.geometry.coordinates[0], // polígono exterior
+        area: feature.properties.area, // área en km²
+        reachfactor: feature.properties.reachfactor
+      }));
+
+      console.log('✅ Isócronas calculadas:', isochrones.length);
+      return { success: true, isochrones, center, profile };
+
+    } catch (error) {
+      console.error('❌ Error calculando isócronas:', error);
+      return { success: false, error: error.message, isochrones: [] };
+    }
   }
 }
 
