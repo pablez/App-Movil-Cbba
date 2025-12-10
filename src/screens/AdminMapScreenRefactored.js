@@ -191,6 +191,41 @@ const AdminMapScreen = ({ navigation, route }) => {
     }
   }, [currentRoute, mapReady, route?.params?.customRoute]);
 
+  // Selector de tipo de mapa (tile layers)
+  const [mapStyle, setMapStyle] = useState('standard');
+
+  const TILE_STYLES = {
+    standard: {
+      url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      attribution: '© OpenStreetMap contributors'
+    },
+    cyclo: {
+      url: 'https://tiles-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
+      attribution: '© OpenStreetMap contributors — CyclOSM'
+    },
+    transport: {
+      url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+      attribution: '&copy; OpenStreetMap contributors & CARTO'
+    }
+  };
+
+  const changeTileLayer = (styleKey) => {
+    const style = TILE_STYLES[styleKey] || TILE_STYLES.standard;
+    setMapStyle(styleKey);
+    if (webViewRef.current && mapReady) {
+      const script = `if(window.setTileLayer) window.setTileLayer("${style.url}", "${style.attribution.replace(/\"/g,'\\\"')}");`;
+      try {
+        webViewRef.current.postMessage(script);
+        console.log('Enviado setTileLayer al WebView:', styleKey);
+      } catch (e) {
+        console.error('Error enviando setTileLayer:', e);
+      }
+    } else {
+      // guardar pedido para aplicar cuando el mapa esté listo
+      setPendingCustomRoute(prev => ({ ...(prev || {}), _tileChange: styleKey }));
+    }
+  };
+
   // Procesar pendingCustomRoute
   useEffect(() => {
     if (!pendingCustomRoute) return;
@@ -222,6 +257,15 @@ const AdminMapScreen = ({ navigation, route }) => {
         try {
           webViewRef.current.postMessage(script);
           console.log('✅ pendingCustomRoute enviado:', cr.name || 'custom');
+          // Si se indicó un cambio de tiles junto con el pendingCustomRoute, aplicarlo ahora
+          if (cr._tileChange && TILE_STYLES[cr._tileChange]) {
+            const style = TILE_STYLES[cr._tileChange];
+            try {
+              const tileScript = `if(window.setTileLayer) window.setTileLayer("${style.url}", "${style.attribution.replace(/"/g,'\\"')}");`;
+              webViewRef.current.postMessage(tileScript);
+              console.log('✅ pending tile change aplicado:', cr._tileChange);
+            } catch (e) { console.error('Error aplicando pending tile change', e); }
+          }
         } catch (e) {
           console.error('❌ Error enviando pendingCustomRoute', e);
         }
@@ -322,7 +366,9 @@ const AdminMapScreen = ({ navigation, route }) => {
         
         <AdminMapControls 
           location={location}
-          onCenterLocation={centerOnLocation}
+            onCenterLocation={centerOnLocation}
+            changeTileLayer={changeTileLayer}
+            mapStyle={mapStyle}
         />
       </View>
 

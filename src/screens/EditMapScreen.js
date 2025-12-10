@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../config/firebase';
 
 const EditMapScreen = ({ navigation, route }) => {
@@ -29,6 +29,8 @@ const EditMapScreen = ({ navigation, route }) => {
   const [selectedPoints, setSelectedPoints] = useState([]); // array of indices
   const [editableRoute, setEditableRoute] = useState(null);
   const [points, setPoints] = useState([]);
+  const originalPointsRef = React.useRef([]);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [selectedPointIndex, setSelectedPointIndex] = useState(null);
   const [showPointModal, setShowPointModal] = useState(false);
   const [isAddingNewPoint, setIsAddingNewPoint] = useState(false);
@@ -44,19 +46,22 @@ const EditMapScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     getCurrentLocation();
-    setupEditableRoute();
+    (async () => { await setupEditableRoute(); })();
   }, []);
 
   // Efecto para actualizar el mapa cuando cambian los puntos (solo si están cargados)
   useEffect(() => {
-    if (pointsLoaded && points.length > 0) {
+    // Solo actualizar automáticamente cuando los puntos estén cargados
+    // y no haya cambios pendientes por confirmar (hasUnsavedChanges === false).
+    if (pointsLoaded && points.length > 0 && !hasUnsavedChanges) {
       console.log('Puntos cambiaron, actualizando mapa automáticamente con', points.length, 'puntos');
       const timer = setTimeout(() => {
         updateMapPoints();
       }, 100); // Pequeño delay para asegurar que el estado se actualice
       return () => clearTimeout(timer);
     }
-  }, [points, pointsLoaded]);
+  }, [points, pointsLoaded, hasUnsavedChanges]);
+  // include hasUnsavedChanges so effect reevaluates when confirmation state changes
 
   const getCurrentLocation = async () => {
     try {
@@ -77,57 +82,80 @@ const EditMapScreen = ({ navigation, route }) => {
     }
   };
 
-  const setupEditableRoute = () => {
+  const setupEditableRoute = async () => {
     const editableRouteParam = route?.params?.editableRoute;
-    if (editableRouteParam) {
-      console.log('EditableRoute recibida:', editableRouteParam);
-      setEditableRoute(editableRouteParam);
-      
-      // Primero intentar usar los points si existen (datos con metadatos)
-      if (editableRouteParam.points && editableRouteParam.points.length > 0) {
-        const routePoints = editableRouteParam.points.map((point, index) => ({
-          latitude: point.latitude,
-          longitude: point.longitude,
-          name: point.name || `Punto ${index + 1}`,
-          street: point.street || '',
-          index: index
-        }));
-        console.log('Usando points con metadatos:', routePoints);
-        setPoints(routePoints);
-      } else {
-        // Fallback: convertir coordenadas básicas
-        const coords = editableRouteParam.coordinates || [];
-        console.log('Coordinates recibidas:', coords);
-        
-        const routePoints = coords.map((coord, index) => {
-          // Manejar diferentes formatos de coordenadas
-          let lat, lng;
-          if (Array.isArray(coord)) {
-            // Formato [lng, lat]
-            lng = coord[0];
-            lat = coord[1];
-          } else if (coord.lat !== undefined && coord.lng !== undefined) {
-            // Formato {lat, lng}
-            lat = coord.lat;
-            lng = coord.lng;
-          } else {
-            console.warn('Formato de coordenada desconocido:', coord);
-            return null;
+    if (!editableRouteParam) return;
+    console.log('EditableRoute recibida:', editableRouteParam);
+    setEditableRoute(editableRouteParam);
+
+    // Si vienen points con metadata, úsalos directamente
+    if (editableRouteParam.points && editableRouteParam.points.length > 0) {
+      const routePoints = editableRouteParam.points.map((point, index) => ({
+        latitude: point.latitude,
+        longitude: point.longitude,
+        name: point.name || `Punto ${index + 1}`,
+        street: point.street || '',
+        index: index
+      }));
+      console.log('Usando points con metadatos:', routePoints);
+      setPoints(routePoints);
+      originalPointsRef.current = JSON.parse(JSON.stringify(routePoints));
+      return;
+    }
+
+    // Si no vienen points pero tenemos un id, intentar obtener metadata desde Firestore
+    if (editableRouteParam.id) {
+      try {
+        const snap = await getDoc(doc(db, 'routes', editableRouteParam.id));
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.points && data.points.length > 0) {
+            const routePoints = data.points.map((point, index) => ({
+              latitude: point.latitude ?? (point.coordinates && point.coordinates[1]) ?? null,
+              longitude: point.longitude ?? (point.coordinates && point.coordinates[0]) ?? null,
+              name: point.name || `Punto ${index + 1}`,
+              street: point.street || '',
+              index: index
+            })).filter(p => p.latitude !== null && p.longitude !== null);
+            if (routePoints.length > 0) {
+              console.log('Metadata de puntos cargada desde Firestore:', routePoints);
+              setPoints(routePoints);
+              originalPointsRef.current = JSON.parse(JSON.stringify(routePoints));
+              return;
+            }
           }
-          
-          return {
-            latitude: lat,
-            longitude: lng,
-            name: `Punto ${index + 1}`,
-            street: '',
-            index: index
-          };
-        }).filter(Boolean);
-        
-        console.log('Puntos convertidos desde coordinates:', routePoints);
-        setPoints(routePoints);
+        }
+      } catch (err) {
+        console.warn('No se pudo obtener documento de ruta desde Firestore:', err);
       }
     }
+
+    // Fallback: convertir coordenadas básicas si no hay metadata
+    const coords = editableRouteParam.coordinates || [];
+    console.log('Coordinates recibidas (fallback):', coords);
+    const routePoints = coords.map((coord, index) => {
+      let lat, lng;
+      if (Array.isArray(coord)) {
+        lng = coord[0];
+        lat = coord[1];
+      } else if (coord.lat !== undefined && coord.lng !== undefined) {
+        lat = coord.lat;
+        lng = coord.lng;
+      } else {
+        console.warn('Formato de coordenada desconocido:', coord);
+        return null;
+      }
+      return {
+        latitude: lat,
+        longitude: lng,
+        name: `Punto ${index + 1}`,
+        street: '',
+        index: index
+      };
+    }).filter(Boolean);
+    console.log('Puntos convertidos desde coordinates (fallback):', routePoints);
+    setPoints(routePoints);
+    originalPointsRef.current = JSON.parse(JSON.stringify(routePoints));
   };
 
   const postMessageToWebView = (message) => {
@@ -271,6 +299,8 @@ const EditMapScreen = ({ navigation, route }) => {
           : p
       )
     );
+    // Marcar que hay cambios no guardados
+    setHasUnsavedChanges(true);
     // El useEffect se encargará de actualizar el mapa automáticamente
   };
 
@@ -462,13 +492,19 @@ const EditMapScreen = ({ navigation, route }) => {
     try {
       // Preparar datos para guardar
       const coordinates = points.map(p => ({ lat: p.latitude, lng: p.longitude }));
-      const pointsWithMetadata = points.map(p => ({
-        latitude: p.latitude,
-        longitude: p.longitude,
-        street: p.street || '',
-        name: p.name || '',
-        coordinates: [p.longitude, p.latitude]
-      }));
+      // Conservar metadata (street/name) usando snapshot original como fallback
+      const pointsWithMetadata = points.map((p, idx) => {
+        const original = originalPointsRef.current && originalPointsRef.current[idx] ? originalPointsRef.current[idx] : {};
+        const street = (p.street !== undefined && p.street !== null && p.street !== '') ? p.street : (original.street || '');
+        const name = (p.name !== undefined && p.name !== null && p.name !== '') ? p.name : (original.name || `Punto ${idx + 1}`);
+        return {
+          latitude: p.latitude,
+          longitude: p.longitude,
+          street,
+          name,
+          coordinates: [p.longitude, p.latitude]
+        };
+      });
 
       // Actualizar en Firestore
       const routeRef = doc(db, 'routes', editableRoute.id);
@@ -479,19 +515,99 @@ const EditMapScreen = ({ navigation, route }) => {
         updatedAt: new Date()
       });
 
+      // Actualizar snapshot original a la versión guardada (para futuros reverts)
+      originalPointsRef.current = JSON.parse(JSON.stringify(pointsWithMetadata));
+
+      // Intentar volver a la pantalla anterior de forma segura.
+      const navigateBackSafe = () => {
+        try {
+          // 1) Si se pasó explicitamente returnTo, usarlo siempre (determinista)
+          if (route?.params?.returnTo) {
+            navigation.navigate(route.params.returnTo, route.params.returnParams || {});
+            return;
+          }
+
+          // 2) Si hay historial y el previo NO es Login, hacer goBack
+          if (navigation.canGoBack && navigation.canGoBack()) {
+            try {
+              const navState = navigation.getState && navigation.getState();
+              if (navState && typeof navState.index === 'number' && Array.isArray(navState.routes)) {
+                const prevIndex = navState.index - 1;
+                if (prevIndex >= 0 && navState.routes[prevIndex]) {
+                  const prev = navState.routes[prevIndex];
+                  // Evitar retroceder al Login
+                  if (prev.name && prev.name.toLowerCase().includes('login')) {
+                    // En su lugar, navegar a una ruta segura para admins si existe
+                    if (navigation.navigate) {
+                      navigation.navigate('AdminLines');
+                      return;
+                    }
+                  }
+                }
+              }
+            } catch (inner) { console.warn('Error leyendo nav state previo', inner); }
+
+            // Si no detectamos prev como Login, hacer goBack normalmente
+            navigation.goBack();
+            return;
+          }
+
+          // 3) Intentar navegar a pantallas seguras por defecto
+          if (navigation.navigate) {
+            try {
+              navigation.navigate('AdminLines');
+              return;
+            } catch (e) {
+              try { navigation.navigate('AdminMap'); return; } catch (_) { /* ignore */ }
+            }
+          }
+
+          // 4) Fallback final a goBack
+          try { navigation.goBack(); } catch (e) { console.warn('Fallback goBack fallo', e); }
+        } catch (e) {
+          console.warn('navigateBackSafe fallo inesperado:', e);
+        }
+      };
+
       Alert.alert(
         'Éxito',
         'Ruta actualizada correctamente',
         [
           {
             text: 'OK',
-            onPress: () => navigation.goBack()
+            onPress: navigateBackSafe
           }
         ]
       );
     } catch (error) {
       console.error('Error guardando cambios:', error);
       Alert.alert('Error', 'No se pudieron guardar los cambios: ' + error.message);
+    }
+  };
+
+  // Confirmar cambios realizados en el mapa (guardar y volver)
+  const confirmMapChanges = () => {
+    // Primero refrescamos el mapa con los puntos actuales
+    try {
+      updateMapPoints();
+    } catch (e) {
+      console.warn('Error refrescando mapa antes de confirmar:', e);
+    }
+    // Marcar como confirmados y proceder a guardar
+    setHasUnsavedChanges(false);
+    saveRouteChanges();
+  };
+
+  // Revertir cambios hechos en el mapa a la última snapshot
+  const cancelMapChanges = () => {
+    if (originalPointsRef.current && originalPointsRef.current.length > 0) {
+      setPoints(JSON.parse(JSON.stringify(originalPointsRef.current)));
+      setHasUnsavedChanges(false);
+      // Forzar refresco en WebView
+      setTimeout(() => updateMapPoints(), 50);
+      Alert.alert('Cancelado', 'Los cambios han sido revertidos');
+    } else {
+      Alert.alert('No hay cambios previos', 'No se encontró un estado anterior para revertir');
     }
   };
 
@@ -905,6 +1021,18 @@ const EditMapScreen = ({ navigation, route }) => {
         mixedContentMode="compatibility"
       />
 
+      {/* Botones flotantes para confirmar/cancelar cambios en el mapa */}
+      {hasUnsavedChanges && (
+        <View style={styles.unsavedContainer} pointerEvents="box-none">
+          <TouchableOpacity style={[styles.unsavedButton, styles.cancelFloating]} onPress={cancelMapChanges} accessibilityLabel="Cancelar cambios">
+            <Ionicons name="close" size={20} color="#fff" />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.unsavedButton, styles.confirmFloating]} onPress={confirmMapChanges} accessibilityLabel="Confirmar cambios">
+            <Ionicons name="checkmark" size={20} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Modal de edición de punto */}
       <Modal
         visible={showPointModal}
@@ -1294,6 +1422,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     marginLeft: 6,
+  },
+  unsavedContainer: {
+    position: 'absolute',
+    right: 16,
+    bottom: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    zIndex: 999,
+  },
+  unsavedButton: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 6,
+  },
+  cancelFloating: {
+    backgroundColor: '#9E9E9E',
+    marginRight: 12,
+  },
+  confirmFloating: {
+    backgroundColor: '#4CAF50',
   },
 });
 

@@ -70,18 +70,129 @@ export const generateMapHTML = (location) => {
                         color: rgba(0,0,0,0.7) !important;
                     }
           .rn-popup {
-              background: #fff;
+              background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
               color: #222;
-              padding: 8px 10px;
-              border-radius: 10px;
-              box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+              padding: 12px 14px;
+              border-radius: 16px;
+              box-shadow: 0 8px 24px rgba(25, 118, 210, 0.15), 0 2px 8px rgba(0,0,0,0.08);
               font-size: 13px;
-              line-height: 16px;
-              max-width: 240px;
+              line-height: 18px;
+              max-width: 260px;
+              border: 2px solid rgba(25, 118, 210, 0.2);
+              position: relative;
+              animation: popupAppear 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
           }
-          .rn-popup .title { color: #1976D2; font-weight: 800; margin-bottom: 6px; }
-          .rn-popup .desc { color: #444; font-size: 12px; }
-          .rn-popup .close-btn { background:#1976D2; color:#fff; border-radius:6px; padding:6px 8px; border:0; cursor:pointer; }
+          .rn-popup .title { 
+              color: #1976D2; 
+              font-weight: 800; 
+              margin-bottom: 6px;
+              font-size: 15px;
+              text-shadow: 0 1px 2px rgba(0,0,0,0.05);
+          }
+          .rn-popup .desc { 
+              color: #555; 
+              font-size: 12px;
+              line-height: 16px;
+          }
+          .rn-popup .close-btn { 
+              background: linear-gradient(135deg, #1976D2 0%, #1565C0 100%);
+              color: #fff; 
+              border-radius: 8px; 
+              padding: 8px 12px; 
+              border: 0; 
+              cursor: pointer;
+              font-weight: 600;
+              font-size: 12px;
+              box-shadow: 0 2px 6px rgba(25, 118, 210, 0.3);
+              transition: all 0.2s ease;
+          }
+          .rn-popup .close-btn:hover {
+              transform: translateY(-1px);
+              box-shadow: 0 4px 10px rgba(25, 118, 210, 0.4);
+          }
+          
+          /* Popup appear animation */
+          @keyframes popupAppear {
+              0% { 
+                  opacity: 0;
+                  transform: scale(0.8) translateY(10px);
+              }
+              100% { 
+                  opacity: 1;
+                  transform: scale(1) translateY(0);
+              }
+          }
+          
+          /* Enhanced bouncing arrow animation */
+          @keyframes arrowBounce {
+              0%, 100% { 
+                  opacity: 1; 
+                  transform: translateY(0) scale(1);
+              }
+              25% {
+                  opacity: 0.7;
+                  transform: translateY(-8px) scale(1.1);
+              }
+              50% {
+                  opacity: 1;
+                  transform: translateY(0) scale(1);
+              }
+              75% {
+                  opacity: 0.7;
+                  transform: translateY(-4px) scale(1.05);
+              }
+          }
+          .arrow-pulse {
+              animation: arrowBounce 2s ease-in-out infinite;
+              display: inline-block;
+              filter: drop-shadow(0 2px 4px rgba(25, 118, 210, 0.3));
+          }
+          
+          /* Pulsing marker on map point */
+          @keyframes markerPulse {
+              0% {
+                  transform: scale(1);
+                  opacity: 0.8;
+              }
+              50% {
+                  transform: scale(1.5);
+                  opacity: 0.3;
+              }
+              100% {
+                  transform: scale(1);
+                  opacity: 0.8;
+              }
+          }
+          .point-marker {
+              width: 24px;
+              height: 24px;
+              background: radial-gradient(circle, #1976D2 40%, rgba(25, 118, 210, 0.3) 100%);
+              border-radius: 50%;
+              position: absolute;
+              animation: markerPulse 2s ease-in-out infinite;
+              box-shadow: 0 0 0 4px rgba(25, 118, 210, 0.2),
+                          0 0 0 8px rgba(25, 118, 210, 0.1),
+                          0 2px 8px rgba(0,0,0,0.2);
+          }
+          
+          /* Connector line between popup and point */
+          .popup-connector {
+              position: absolute;
+              width: 2px;
+              background: linear-gradient(to bottom, 
+                  rgba(25, 118, 210, 0.6) 0%,
+                  rgba(25, 118, 210, 0.3) 50%,
+                  rgba(25, 118, 210, 0) 100%);
+              bottom: -20px;
+              left: 50%;
+              margin-left: -1px;
+              height: 20px;
+              animation: connectorPulse 2s ease-in-out infinite;
+          }
+          @keyframes connectorPulse {
+              0%, 100% { opacity: 0.6; }
+              50% { opacity: 1; }
+          }
       </style>
   </head>
   <body>
@@ -165,6 +276,18 @@ export const generateMapHTML = (location) => {
                           url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                           crossOrigin: 'anonymous',
                           attributions: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+                          maxZoom: 19
+                      }),
+                      cyclo: new ol.source.XYZ({
+                          url: 'https://tiles-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
+                          crossOrigin: 'anonymous',
+                          attributions: '© OpenStreetMap contributors — CyclOSM',
+                          maxZoom: 19
+                      }),
+                      transport: new ol.source.XYZ({
+                          url: 'https://{a-c}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+                          crossOrigin: 'anonymous',
+                          attributions: '&copy; OpenStreetMap contributors & CARTO',
                           maxZoom: 19
                       }),
                       satellite: new ol.source.XYZ({
@@ -562,6 +685,29 @@ export const generateMapHTML = (location) => {
               }
           }
 
+              // Mostrar varias rutas (líneas de transporte)
+              function showRoutes(routes) {
+                  if (!window.map) return;
+                  try {
+                      if (!window._routesLayer) {
+                          window._routesLayer = new ol.layer.Vector({ source: new ol.source.Vector(), zIndex: 50 });
+                          window.map.addLayer(window._routesLayer);
+                      } else {
+                          window._routesLayer.getSource().clear();
+                      }
+
+                      routes.forEach(function(rt) {
+                          if (!rt || !rt.coordinates || rt.coordinates.length === 0) return;
+                          var routeCoords = rt.coordinates.map(function(c) { return ol.proj.fromLonLat([c[0], c[1]]); });
+                          var feat = new ol.Feature({ geometry: new ol.geom.LineString(routeCoords) });
+                          feat.setStyle(new ol.style.Style({ stroke: new ol.style.Stroke({ color: rt.color || '#1976D2', width: 4 }) }));
+                          feat.set('meta', { id: rt.id, name: rt.name });
+                          window._routesLayer.getSource().addFeature(feat);
+                      });
+                      console.log('✅ showRoutes: dibujadas', routes.length, 'rutas');
+                  } catch (e) { console.error('❌ showRoutes error', e); }
+              }
+
           function clearAll() {
               if (!window.map) return;
               
@@ -592,6 +738,19 @@ export const generateMapHTML = (location) => {
                   if (typeof lat === 'undefined' || typeof lng === 'undefined') return;
                   var coords = ol.proj.fromLonLat([lng, lat]);
 
+                  // Crear marcador pulsante en el punto exacto del mapa
+                  var markerElement = document.createElement('div');
+                  markerElement.className = 'point-marker';
+                  var markerOverlay = new ol.Overlay({
+                      element: markerElement,
+                      positioning: 'center-center',
+                      stopEvent: false,
+                      offset: [0, 0]
+                  });
+                  markerOverlay.setPosition(coords);
+                  window.map.addOverlay(markerOverlay);
+                  window._rnPopupMarker = markerOverlay;
+
                   var container = document.createElement('div');
                   container.className = 'rn-popup';
 
@@ -601,23 +760,19 @@ export const generateMapHTML = (location) => {
                   if (popup.description) html += '<div class="desc">' + popup.description + '</div>';
 
                   // If meta is provided, render its known fields in a compact list
-                                    if (popup.meta && typeof popup.meta === 'object' && Object.keys(popup.meta).length > 0) {
-                                            html += '<div style="margin-top:8px;font-size:12px;color:#555;">';
-                                            if (popup.meta.street) html += '<div><strong>Calle:</strong> ' + popup.meta.street + '</div>';
-                                            if (popup.meta.rawStreet) html += '<div style="font-style:italic;color:#666;margin-top:4px;">Atributo: ' + popup.meta.rawStreet + '</div>';
-                                            if (popup.meta.name) html += '<div style="margin-top:6px;"><strong>Nombre:</strong> ' + popup.meta.name + '</div>';
-                                            if (popup.meta.coordinates) html += '<div style="margin-top:6px;color:#444;"><strong>Coords:</strong> ' + JSON.stringify(popup.meta.coordinates) + '</div>';
-                                            if (typeof popup.meta.latitude !== 'undefined' && typeof popup.meta.longitude !== 'undefined') html += '<div style="margin-top:6px;color:#444;"><strong>Lat:</strong> ' + Number(popup.meta.latitude).toFixed(6) + ' • <strong>Lng:</strong> ' + Number(popup.meta.longitude).toFixed(6) + '</div>';
-                                            html += '</div>';
-                                    } else {
-                                            // Fallback de depuración: mostrar payload entero si no hay meta para ayudar a diagnosticar
-                                            try {
-                                                var pretty = JSON.stringify(popup, null, 2);
-                                                html += '<div style="margin-top:8px;font-size:11px;color:#333;background:#f7f7f7;padding:6px;border-radius:6px;max-width:260px;overflow:auto;"><strong>Debug:</strong><pre style="white-space:pre-wrap;word-break:break-word;">' + pretty + '</pre></div>';
-                                            } catch (e) {
-                                                // ignore
-                                            }
-                                    }
+                            if (popup.meta && typeof popup.meta === 'object' && Object.keys(popup.meta).length > 0) {
+                                html += '<div style="margin-top:8px;font-size:12px;color:#555;">';
+                                if (popup.meta.street) html += '<div><strong>Calle:</strong> ' + popup.meta.street + '</div>';
+                                if (popup.meta.rawStreet) html += '<div style="font-style:italic;color:#666;margin-top:4px;">Atributo: ' + popup.meta.rawStreet + '</div>';
+                                if (popup.meta.name) html += '<div style="margin-top:6px;"><strong>Nombre:</strong> ' + popup.meta.name + '</div>';
+                                if (popup.meta.coordinates) html += '<div style="margin-top:6px;color:#444;"><strong>Coords:</strong> ' + JSON.stringify(popup.meta.coordinates) + '</div>';
+                                if (typeof popup.meta.latitude !== 'undefined' && typeof popup.meta.longitude !== 'undefined') html += '<div style="margin-top:6px;color:#444;"><strong>Lat:</strong> ' + Number(popup.meta.latitude).toFixed(6) + ' • <strong>Lng:</strong> ' + Number(popup.meta.longitude).toFixed(6) + '</div>';
+                                html += '</div>';
+                            }
+                            
+                            // Línea conectora visual y flecha mejorada
+                            html += '<div class="popup-connector"></div>';
+                            html += '<div style="text-align:center;margin-top:10px;margin-bottom:4px;"><span class="arrow-pulse" style="font-size:28px;color:#1976D2;">↓</span></div>';
 
                   html += '<div style="text-align:right;margin-top:8px;"><button id="rn-popup-close" class="close-btn">Cerrar</button></div>';
 
@@ -625,7 +780,7 @@ export const generateMapHTML = (location) => {
                   document.body.appendChild(container);
 
                   // stopEvent true to prevent clicks inside the popup from propagating to the map
-                  var overlay = new ol.Overlay({ element: container, positioning: 'bottom-center', stopEvent: true, offset: [0, -14] });
+                  var overlay = new ol.Overlay({ element: container, positioning: 'bottom-center', stopEvent: true, offset: [0, -18] });
                   overlay.setPosition(coords);
                   window.map.addOverlay(overlay);
                   window._rnPopupOverlay = overlay;
@@ -647,6 +802,13 @@ export const generateMapHTML = (location) => {
                       window.map.removeOverlay(window._rnPopupOverlay);
                       if (el && el.parentNode) el.parentNode.removeChild(el);
                       window._rnPopupOverlay = null;
+                  }
+                  // Eliminar marcador del punto
+                  if (window._rnPopupMarker) {
+                      var markerEl = window._rnPopupMarker.getElement();
+                      window.map.removeOverlay(window._rnPopupMarker);
+                      if (markerEl && markerEl.parentNode) markerEl.parentNode.removeChild(markerEl);
+                      window._rnPopupMarker = null;
                   }
               } catch (e) { console.warn('❌ hidePopup error', e); }
           }
@@ -722,6 +884,11 @@ export const generateMapHTML = (location) => {
                                                             showPopup(msg.popup);
                           }
                           break;
+                                                case 'showRoutes':
+                                                        if (msg.routes && Array.isArray(msg.routes)) {
+                                                                showRoutes(msg.routes);
+                                                        }
+                                                        break;
                       case 'hidePopup':
                           hidePopup();
                           break;

@@ -222,24 +222,46 @@ const PublicMapScreen = ({ navigation, route }) => {
       webViewRef.current.postCommand({ type: 'updateLocation', latitude: lat, longitude: lng, force: true });
       // ensure map isn't following user so the stop is centered
       webViewRef.current.postCommand({ type: 'setFollowUser', follow: false });
-      // send richer popup payload so WebView can show street, name, coordinates and lat/lng
-      const popupPayload = {
-        type: 'showPopup',
-        popup: {
-          latitude: lat,
-          longitude: lng,
-          title: nameStr || 'Parada',
-          description,
-          meta: {
-            street: street || '',
-            rawStreet: rawStreet || '',
-            name: nameStr || '',
-            coordinates: coords || [lng, lat],
-            latitude: lat,
-            longitude: lng
+      // send minimal popup payload: title, description (street) and optional date
+        // keep latitude/longitude so WebView can center the popup, and include a human-friendly date if available
+        // Try to resolve a date from common properties
+        let pointDate = null;
+        try {
+          const candidates = [stop.date, stop.createdAt, stop.timestamp, stop.time, stop.date_created, (stop.properties && stop.properties.date), (stop.properties && stop.properties.createdAt), (stop.properties && stop.properties.timestamp)];
+          for (let i = 0; i < candidates.length; i++) {
+            const c = candidates[i];
+            if (!c && c !== 0) continue;
+            let ms = null;
+            if (typeof c === 'object') {
+              // Firestore Timestamp-like
+              if (typeof c.seconds === 'number') ms = c.seconds * 1000;
+              else if (typeof c.toDate === 'function') {
+                try { ms = c.toDate().getTime(); } catch (e) { ms = null; }
+              }
+            } else if (typeof c === 'number') {
+              // seconds vs milliseconds
+              if (c > 1e12) ms = c; else if (c > 1e9) ms = c * 1000; else ms = c * 1000;
+            } else if (typeof c === 'string') {
+              const parsed = Date.parse(c);
+              if (!isNaN(parsed)) ms = parsed;
+            }
+            if (ms && !isNaN(ms)) {
+              pointDate = new Date(ms).toLocaleString();
+              break;
+            }
           }
-        }
-      };
+        } catch (e) { pointDate = null; }
+
+        const popupPayload = {
+          type: 'showPopup',
+          popup: {
+            latitude: lat,
+            longitude: lng,
+            title: nameStr || 'Parada',
+            description,
+            date: pointDate || undefined
+          }
+        };
 
       // Debug log: show what RN is sending to the WebView
       try { console.log('RN -> WebView showPopup payload:', popupPayload); } catch (e) {}
@@ -564,32 +586,18 @@ const PublicMapScreen = ({ navigation, route }) => {
               keyExtractor={(item, idx) => (item.id ? String(item.id) : (item.name ? String(item.name) : String(idx)))}
               renderItem={({ item, index }) => {
                   const label = item.name || item.label || `Parada ${index + 1}`;
-                  const coordsFromItem = resolveCoords(item) || (Array.isArray(item.coordinates) ? item.coordinates : null);
-                  const lng = coordsFromItem && coordsFromItem.length >= 1 ? coordsFromItem[0] : (item.longitude ?? item.lng ?? null);
-                  const lat = coordsFromItem && coordsFromItem.length >= 2 ? coordsFromItem[1] : (item.latitude ?? item.lat ?? null);
-                  // extraer número de punto si viene en el nombre
-                  const numMatch = String(label).match(/(\d+)/);
-                  const pointNumber = numMatch ? numMatch[1] : String(index + 1);
                   const street = resolveStreet(item);
-                  const rawStreet = item && (item.street ?? item.address ?? item.direccion ?? null);
-                  // Formatear la representación de las coordenadas
-                  const coordsText = coordsFromItem ? `[${coordsFromItem[0]}, ${coordsFromItem[1]}]` : (Array.isArray(item.coordinates) ? JSON.stringify(item.coordinates) : null);
-                      return (
-                        <TouchableOpacity activeOpacity={0.8} onPress={() => handleShowStopOnMap(item, index)} style={styles.stopRow}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.stopLabel}>{label} {pointNumber ? `· Nº ${pointNumber}` : ''}</Text>
-                            {street ? <Text style={[styles.stopCoord, { color: '#444' }]}>{street}</Text> : null}
-                            {rawStreet ? <Text style={[styles.stopCoord, { color: '#666', fontStyle: 'italic' }]}>Atributo 'street': {rawStreet}</Text> : null}
-                            {coordsText ? <Text style={[styles.stopCoord, { color: '#666' }]}>Coords: {coordsText}</Text> : null}
-                            {lat != null && lng != null ? (
-                              <Text style={styles.stopCoord}>Lat: {lat.toFixed(6)}  •  Lng: {lng.toFixed(6)}</Text>
-                            ) : null}
-                          </View>
-                          <TouchableOpacity style={styles.stopShowBtn} onPress={() => handleShowStopOnMap(item, index)}>
-                            <Text style={styles.stopShowText}>Mostrar</Text>
-                          </TouchableOpacity>
-                        </TouchableOpacity>
-                      );
+                  return (
+                    <TouchableOpacity activeOpacity={0.85} onPress={() => handleShowStopOnMap(item, index)} style={styles.stopRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.stopLabel}>{label}</Text>
+                        {street ? <Text style={styles.stopStreet}>{street}</Text> : null}
+                      </View>
+                      <TouchableOpacity style={styles.stopShowBtn} onPress={() => handleShowStopOnMap(item, index)}>
+                        <Ionicons name="chevron-forward" size={20} color="#1976D2" />
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                  );
               }}
             />
           </View>
@@ -817,7 +825,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f0f0f0',
   },
   stopLabel: {
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '700',
     color: '#333',
   },
@@ -828,14 +836,18 @@ const styles = StyleSheet.create({
   },
   stopShowBtn: {
     backgroundColor: '#E3F2FD',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
+    padding: 8,
+    borderRadius: 18,
     marginLeft: 12,
   },
   stopShowText: {
     color: '#1976D2',
     fontWeight: '700',
+  },
+  stopStreet: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 4,
   },
   mapContainer: {
     flex: 1,

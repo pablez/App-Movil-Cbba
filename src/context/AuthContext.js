@@ -145,7 +145,10 @@ export const AuthProvider = ({ children }) => {
       let uploadedImages = {};
       try {
         if (userData && userData.images) {
-          uploadedImages = await uploadUserImages(userId, userData.images, onUploadProgress);
+          const resp = await uploadUserImages(userId, userData.images, onUploadProgress);
+          if (resp && resp.uploaded) {
+            uploadedImages = resp.uploaded;
+          }
         }
       } catch (uploadErr) {
         console.error('Error uploading user images during registration:', uploadErr);
@@ -181,7 +184,28 @@ export const AuthProvider = ({ children }) => {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       console.log('AuthProvider.register: auth.currentUser now', auth.currentUser?.uid);
-      await setDoc(doc(db, 'users', userId), userDataToSave);
+      try {
+        await setDoc(doc(db, 'users', userId), userDataToSave);
+      } catch (setDocErr) {
+        console.error('AuthProvider.register: setDoc failed, attempting rollback (delete auth user)', setDocErr);
+        // Intentar eliminar el usuario de Auth para evitar cuentas huérfanas
+        try {
+          // userCredential.user.delete() requiere que el usuario esté autenticado recientemente;
+          // como acaba de crearse, esto normalmente funcionará.
+          await userCredential.user.delete();
+          console.log('AuthProvider.register: rollback successful, deleted auth user', userId);
+        } catch (deleteErr) {
+          console.error('AuthProvider.register: rollback delete failed', deleteErr);
+        }
+        return { success: false, code: 'firestore/setDoc-failed', error: 'Error al guardar datos del usuario. Intenta de nuevo más tarde.' };
+      }
+
+      // Cerrar sesión explícitamente: la cuenta queda en estado 'pending' y no debe permanecer autenticada
+      try {
+        await signOut(auth);
+      } catch (soErr) {
+        console.warn('AuthProvider.register: signOut after register failed', soErr);
+      }
 
       return { success: true, user: userCredential.user };
     } catch (error) {

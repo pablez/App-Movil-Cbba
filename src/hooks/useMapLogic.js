@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Alert, AppState } from 'react-native';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../config/firebase';
 import LocationService from '../services/LocationService';
 import { DEFAULT_LOCATION, MESSAGE_TYPES } from '../constants/mapConstants';
 
@@ -22,6 +24,7 @@ export const useMapLogic = () => {
   const webViewRef = useRef(null);
   const appStateRef = useRef(AppState.currentState);
   const mapReadyRef = useRef(false);
+  const pendingTransportRef = useRef(false);
   const startPointRef = useRef(null);
   const endPointRef = useRef(null);
   const routeRef = useRef(null);
@@ -163,18 +166,82 @@ export const useMapLogic = () => {
   };
 
   const changeMapType = (newMapType) => {
-    if (!webViewRef.current || !mapReadyRef.current) return;
-    
+    // Siempre actualizamos el estado local inmediatamente
+    setMapType(newMapType);
+
     try {
       const message = JSON.stringify({
         type: MESSAGE_TYPES.CHANGE_MAP_TYPE,
         mapType: newMapType
       });
-      
-      webViewRef.current.postMessage(message);
-      setMapType(newMapType);
+
+      if (webViewRef.current && mapReadyRef.current) {
+        webViewRef.current.postMessage(message);
+      } else {
+        // Si el WebView no está listo, marcamos la acción pendiente
+        if (newMapType === 'transport') pendingTransportRef.current = true;
+        console.warn('⚠️ WebView no listo para cambiar tipo de mapa, acción pendiente');
+      }
+
+      // Si seleccionaron el tipo 'transport' y el mapa ya está listo, cargar rutas
+      if (newMapType === 'transport' && webViewRef.current && mapReadyRef.current) {
+        fetchAndShowTransportRoutes();
+      }
     } catch (error) {
       console.error('Error cambiando tipo de mapa:', error);
+    }
+  };
+
+  // Cargar y mostrar rutas de transporte desde Firestore cuando se seleccione el tipo 'transport'
+  const fetchAndShowTransportRoutes = async () => {
+    try {
+      console.log('🔁 Cargando rutas de transporte desde Firestore...');
+      const routesSnapshot = await getDocs(collection(db, 'routes'));
+      const routes = [];
+      routesSnapshot.forEach(doc => {
+        const data = doc.data() || {};
+        // Filtrar rutas que tengan metadata de transporte (transportType) o flag public
+        const isTransport = !!data.transportType || data.transport === true || data.isTransport === true;
+        if (!isTransport) return;
+
+        // Normalizar coordenadas a [[lng,lat], ...]
+        let coords = [];
+        if (Array.isArray(data.coordinates)) {
+          coords = data.coordinates.map(c => {
+            if (Array.isArray(c) && c.length >= 2) return [Number(c[0]), Number(c[1])];
+            if (c && typeof c === 'object') {
+              // admitir { latitude, longitude } o { lat, lng } o { lng, lat }
+              const lat = c.latitude ?? c.lat ?? c[1] ?? null;
+              const lng = c.longitude ?? c.lng ?? c[0] ?? null;
+              if (lat !== null && lng !== null) return [Number(lng), Number(lat)];
+            }
+            return null;
+          }).filter(Boolean);
+        }
+
+        if (coords.length > 0) {
+          routes.push({ id: doc.id, name: data.name || '', color: data.color || '#1976D2', coordinates: coords });
+        }
+      });
+
+      if (routes.length === 0) {
+        console.log('ℹ️ No se encontraron rutas de transporte en Firestore');
+        return { success: true, routes: [] };
+      }
+
+      // Enviar mensaje al WebView para que dibuje todas las rutas
+      if (webViewRef.current && mapReadyRef.current) {
+        const msg = JSON.stringify({ type: 'showRoutes', routes });
+        webViewRef.current.postMessage(msg);
+        console.log('✅ Enviadas', routes.length, 'rutas al WebView');
+      } else {
+        console.warn('⚠️ WebView no listo - rutas pendientes');
+      }
+
+      return { success: true, routes };
+    } catch (error) {
+      console.error('Error cargando rutas de Firestore:', error);
+      return { success: false, error: error.message };
     }
   };
 
@@ -277,6 +344,13 @@ export const useMapLogic = () => {
       setTimeout(() => {
         updateLocationOnMap(location.latitude, location.longitude);
       }, 1000);
+    }
+    // Si había una petición pendiente de mostrar rutas de transporte, procesarla ahora
+    if (pendingTransportRef.current) {
+      pendingTransportRef.current = false;
+      setTimeout(() => {
+        fetchAndShowTransportRoutes();
+      }, 400);
     }
   };
 

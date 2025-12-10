@@ -68,6 +68,25 @@ export const generateAdminMapHTML = (editMode = false) => {
           
           tileLayer.addTo(window.map);
 
+                    // Exponer función para cambiar capa de tiles desde React Native
+                    window.setTileLayer = function(url, attribution) {
+                        try {
+                            if (tileLayer) {
+                                try { window.map.removeLayer(tileLayer); } catch (e) { /* ignore */ }
+                                tileLayer = null;
+                            }
+                            tileLayer = L.tileLayer(url, {
+                                attribution: attribution || '',
+                                maxZoom: 19,
+                                tileSize: 256,
+                                crossOrigin: true
+                            }).addTo(window.map);
+                            console.log('Tile layer cambiada a', url);
+                        } catch (e) {
+                            console.error('Error cambiando tile layer', e);
+                        }
+                    };
+
           // Variables globales
           window.currentLocationMarker = null;
           window.searchMarkers = [];

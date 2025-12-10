@@ -2,6 +2,8 @@
 
 export const MAP_TYPES = [
   { key: 'osm', name: 'Estándar', icon: 'map', color: '#1976D2', desc: 'Mapa clásico con calles' },
+  { key: 'cyclo', name: 'Ciclista', icon: 'bicycle', color: '#00A676', desc: 'Mapa orientado a ciclistas (carriles y vías ciclables)' },
+  { key: 'transport', name: 'Transporte', icon: 'bus', color: '#FF5722', desc: 'Mapa optimizado para transporte público (rutas y paraderos)' },
   { key: 'satellite', name: 'Satélite', icon: 'earth', color: '#4CAF50', desc: 'Vista satelital' },
   { key: 'terrain', name: 'Terreno', icon: 'triangle', color: '#FF9800', desc: 'Relieve y topografía' },
   { key: 'dark', name: 'Oscuro', icon: 'moon', color: '#424242', desc: 'Modo nocturno optimizado' },

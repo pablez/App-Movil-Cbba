@@ -35,6 +35,47 @@ export default function generateMapHTML() {
                 z-index: 1000;
                 text-align: center;
             }
+            /* Popup card */
+            .popup-card {
+                background: #fff;
+                color: #222;
+                border-radius: 10px;
+                padding: 10px 12px;
+                box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+                font-family: Arial, sans-serif;
+                min-width: 180px;
+                max-width: 300px;
+            }
+            .popup-title {
+                font-weight: 800;
+                font-size: 14px;
+                margin-bottom: 6px;
+            }
+            .popup-desc {
+                font-size: 13px;
+                color: #444;
+                margin-bottom: 8px;
+            }
+            .popup-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 8px;
+            }
+            .popup-btn {
+                background: transparent;
+                border: none;
+                color: #1976D2;
+                font-weight: 700;
+                cursor: pointer;
+                padding: 6px 8px;
+                border-radius: 6px;
+            }
+            .popup-more {
+                font-size: 12px;
+                color: #666;
+                margin-top: 8px;
+                display: none;
+            }
         </style>
     </head>
     <body>
@@ -315,6 +356,98 @@ export default function generateMapHTML() {
                         });
                     }
                 };
+
+                // Popup helper: show a minimal popup with title and description
+                window.closePopup = function() {
+                    try {
+                        if (window.currentPopupOverlay) {
+                            window.map.removeOverlay(window.currentPopupOverlay);
+                            window.currentPopupOverlay = null;
+                        }
+                    } catch (e) { console.warn('closePopup error', e); }
+                };
+
+                window.showPopup = function(popup) {
+                    try {
+                        window.closePopup();
+                        if (!popup || (!popup.latitude && !popup.longitude)) return;
+
+                        // create element
+                        var el = document.createElement('div');
+                        el.className = 'popup-card';
+
+                        var title = document.createElement('div');
+                        title.className = 'popup-title';
+                        title.innerText = popup.title || 'Parada';
+                        el.appendChild(title);
+
+                        var desc = document.createElement('div');
+                        desc.className = 'popup-desc';
+                        desc.innerText = popup.description || '';
+                        el.appendChild(desc);
+
+                        // more info (hidden by default)
+                        var more = document.createElement('div');
+                        more.className = 'popup-more';
+                        if (popup.meta) {
+                            var lines = [];
+                            if (popup.meta.coordinates) lines.push('Coords: [' + popup.meta.coordinates[0] + ', ' + popup.meta.coordinates[1] + ']');
+                            if (typeof popup.meta.latitude === 'number' && typeof popup.meta.longitude === 'number') lines.push('Lat: ' + popup.meta.latitude + ' • Lng: ' + popup.meta.longitude);
+                            if (popup.meta.rawStreet) lines.push('Atributo: ' + popup.meta.rawStreet);
+                            more.innerText = lines.join(' \n ');
+                        } else {
+                            more.innerText = '';
+                        }
+                        el.appendChild(more);
+
+                        var actions = document.createElement('div');
+                        actions.className = 'popup-actions';
+
+                        var moreBtn = document.createElement('button');
+                        moreBtn.className = 'popup-btn';
+                        moreBtn.innerText = 'Más información';
+                        moreBtn.onclick = function(ev) {
+                            ev.stopPropagation();
+                            if (more.style.display === 'none' || more.style.display === '') {
+                                more.style.display = 'block';
+                                moreBtn.innerText = 'Ocultar';
+                            } else {
+                                more.style.display = 'none';
+                                moreBtn.innerText = 'Más información';
+                            }
+                        };
+                        actions.appendChild(moreBtn);
+
+                        var closeBtn = document.createElement('button');
+                        closeBtn.className = 'popup-btn';
+                        closeBtn.innerText = 'Cerrar';
+                        closeBtn.onclick = function(ev) {
+                            ev.stopPropagation();
+                            window.closePopup();
+                        };
+                        actions.appendChild(closeBtn);
+
+                        el.appendChild(actions);
+
+                        // create overlay
+                        var overlay = new ol.Overlay({
+                            element: el,
+                            positioning: 'bottom-center',
+                            stopEvent: false,
+                            offset: [0, -10]
+                        });
+
+                        window.currentPopupOverlay = overlay;
+                        window.map.addOverlay(overlay);
+
+                        // position and center
+                        var coord = ol.proj.fromLonLat([popup.longitude, popup.latitude]);
+                        overlay.setPosition(coord);
+                        window.map.getView().animate({ center: coord, duration: 400 });
+                    } catch (e) {
+                        console.error('showPopup error', e);
+                    }
+                };
                 
                 // Esperar a que se complete el render
                 window.map.once('rendercomplete', function() {
@@ -369,9 +502,13 @@ export default function generateMapHTML() {
                         case 'showRoute':
                             window.showRoute(data.coordinates, data.color, data.style);
                             break;
-                        case 'centerOnRoute':
-                            window.centerOnRoute(data.coordinates, data.color, data.name);
-                            break;
+                                case 'centerOnRoute':
+                                    window.centerOnRoute(data.coordinates, data.color, data.name);
+                                    break;
+                                case 'showPopup':
+                                    // data.popup expected: { latitude, longitude, title, description, meta? }
+                                    window.showPopup && window.showPopup(data.popup);
+                                    break;
                     }
                 } catch (error) {
                     console.error('❌ Error procesando mensaje:', error);

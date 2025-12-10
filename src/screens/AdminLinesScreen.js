@@ -291,8 +291,9 @@ const AdminLinesScreen = ({ navigation, route }) => {
         public: true // Marcar automáticamente nuevas rutas como públicas
       };
 
+      // Guardar/actualizar documento en Firestore
+      let createdRef = null;
       if (editingRouteId) {
-        // Actualizar documento existente
         const updPayload = {
           ...payloadBase,
           updatedBy: auth.currentUser ? auth.currentUser.uid : null,
@@ -306,12 +307,19 @@ const AdminLinesScreen = ({ navigation, route }) => {
           createdBy: auth.currentUser ? auth.currentUser.uid : null,
           createdAt: serverTimestamp()
         };
-        const ref = await addDoc(collection(db, 'routes'), newPayload);
-        console.log('Ruta guardada en Firestore:', ref.id);
+        createdRef = await addDoc(collection(db, 'routes'), newPayload);
+        console.log('Ruta guardada en Firestore:', createdRef.id);
       }
 
-      // Mostrar en el mapa usando pares [lng, lat]
-      navigation.navigate('AdminMap', { customRoute: { coordinates: coordsPairs, color, name } });
+      // Navegar a la pantalla de edición `EditMap` con la ruta recién guardada/actualizada
+      const savedRouteId = editingRouteId || (createdRef ? createdRef.id : null);
+      if (savedRouteId) {
+        // Pasar metadata completa de puntos para que EditMap tenga calles/nombres
+        navigation.navigate('EditMap', { editMode: true, editableRoute: { id: savedRouteId, coordinates: coordsPairs, name, color, points: pointsWithMetadata }, returnTo: 'AdminLines' });
+      } else {
+        // Fallback: si por alguna razón no tenemos id, mostrar en AdminMap
+        navigation.navigate('AdminMap', { customRoute: { coordinates: coordsPairs, color, name } });
+      }
 
       // Reset formulario
       setEditing(false);
@@ -377,7 +385,9 @@ const AdminLinesScreen = ({ navigation, route }) => {
           <TouchableOpacity style={[styles.smallButton, { backgroundColor: '#FFA000' }]} onPress={() => {
             // Abrir la pantalla dedicada de edición para mover/añadir puntos.
             const coords = convertCoordsToPairs(item.coordinates);
-            navigation.navigate('EditMap', { editMode: true, editableRoute: { id: item.id, coordinates: coords, name: item.name, color: item.color }, returnTo: 'AdminLines' });
+            // Si el item ya contiene metadata de puntos, pásala para preservar street/name
+            const pointsMeta = item.points && item.points.length > 0 ? item.points.map(p => ({ latitude: p.latitude, longitude: p.longitude, street: p.street || '', name: p.name || '' })) : undefined;
+            navigation.navigate('EditMap', { editMode: true, editableRoute: { id: item.id, coordinates: coords, name: item.name, color: item.color, points: pointsMeta }, returnTo: 'AdminLines' });
           }}>
             <Text style={styles.smallButtonText}>Editar</Text>
           </TouchableOpacity>
@@ -456,7 +466,7 @@ const AdminLinesScreen = ({ navigation, route }) => {
       </Modal>
 
       {!editing ? (
-        <View style={{ paddingHorizontal: 12, marginTop: 8 }}>
+        <View style={{ flex: 1, paddingHorizontal: 12, marginTop: 8 }}>
           <TouchableOpacity style={styles.createButton} onPress={() => setEditing(true)}>
             <Text style={styles.createButtonText}>+ Crear Línea</Text>
           </TouchableOpacity>
@@ -474,7 +484,8 @@ const AdminLinesScreen = ({ navigation, route }) => {
             data={[...persistedRoutes]}
             keyExtractor={i => i.id}
             renderItem={renderLine}
-            style={{ marginTop: 12 }}
+            style={{ marginTop: 12, flex: 1 }}
+            contentContainerStyle={{ paddingBottom: 140 }}
           />
         </View>
       ) : (

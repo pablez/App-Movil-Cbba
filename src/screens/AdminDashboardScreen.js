@@ -28,22 +28,16 @@ const AdminDashboardScreen = ({ navigation }) => {
   const loadPendingUsers = async () => {
     setLoading(true);
     try {
-      console.log('🔍 Cargando usuarios pendientes...');
-      
-      // Buscar usuarios con status "pending" en lugar de isApproved
       const q = query(
         collection(db, 'users'),
-        where('status', '==', 'pending')
+        where('isApproved', '==', false)
       );
       
       const querySnapshot = await getDocs(q);
       const users = [];
       
-      console.log('📊 Documentos encontrados:', querySnapshot.size);
-      
       querySnapshot.forEach((doc) => {
         const userData = { id: doc.id, ...doc.data() };
-        console.log('👤 Usuario encontrado:', userData.firstName, userData.lastName, userData.status);
         users.push(userData);
       });
       
@@ -85,6 +79,17 @@ const AdminDashboardScreen = ({ navigation }) => {
     return role === USER_ROLES.DRIVER ? 'car' : 'person';
   };
 
+  const handleLogout = () => {
+    Alert.alert(
+      'Cerrar Sesión',
+      '¿Estás seguro que deseas cerrar sesión?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Sí, cerrar sesión', style: 'destructive', onPress: logout }
+      ]
+    );
+  };
+
   const getRoleColor = (role) => {
     return role === USER_ROLES.DRIVER ? '#F24236' : '#2E86AB';
   };
@@ -104,31 +109,43 @@ const AdminDashboardScreen = ({ navigation }) => {
             <Text style={styles.userName}>
               {item.firstName} {item.lastName}
             </Text>
-            <View style={[styles.roleBadge, { backgroundColor: getRoleColor(item.role) }]}>
+            <View style={[styles.roleBadge, { backgroundColor: getRoleColor(item.role) }]}> 
               <Ionicons name={getRoleIcon(item.role)} size={12} color="white" />
               <Text style={styles.roleText}>{getRoleText(item.role)}</Text>
             </View>
           </View>
           <Text style={styles.userEmail}>{item.email}</Text>
+          {/* Mostrar teléfono si existe */}
+          {item.phone && <Text style={styles.userPhone}>{item.phone}</Text>}
+        </View>
+
+        <View style={styles.rightSection}>
+          <Text style={styles.dateText}>{formatDate(item.createdAt)}</Text>
+          <Ionicons name="chevron-forward" size={20} color="#666" />
         </View>
       </View>
-      <View style={styles.userDetails}>
-        <View style={styles.detailRow}>
-          <Ionicons name="calendar" size={16} color="#666" />
-          <Text style={styles.detailText}>
-            Registrado: {formatDate(item.createdAt?.toDate ? item.createdAt.toDate() : item.createdAt)}
+
+      {/* Información específica del rol */}
+      {item.role === USER_ROLES.DRIVER && item.vehicleInfo && (
+        <View style={styles.vehicleInfo}>
+          <Text style={styles.vehicleText}>
+            🚗 {item.vehicleInfo.model} - {item.vehicleInfo.plate}
           </Text>
         </View>
-        {item.phoneNumber && (
-          <View style={styles.detailRow}>
-            <Ionicons name="call" size={16} color="#666" />
-            <Text style={styles.detailText}>{item.phoneNumber}</Text>
-          </View>
-        )}
-      </View>
-      <View style={styles.cardFooter}>
-        <Text style={styles.tapHint}>Toca para revisar solicitud</Text>
-        <Ionicons name="chevron-forward" size={16} color="#2E86AB" />
+      )}
+
+      {item.role === USER_ROLES.PASSENGER && (
+        <View style={styles.passengerInfo}>
+          <Text style={styles.passengerText}>
+            👤 Tipo: {item.passengerType || 'No especificado'}
+          </Text>
+        </View>
+      )}
+
+      <View style={styles.statusContainer}>
+        <View style={styles.pendingBadge}>
+          <Text style={styles.pendingText}>⏳ Pendiente de aprobación</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -343,6 +360,60 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     paddingHorizontal: 40,
+  },
+  // Added from backup
+  userPhone: {
+    fontSize: 14,
+    color: '#666',
+  },
+  rightSection: {
+    alignItems: 'flex-end',
+  },
+  dateText: {
+    fontSize: 12,
+    color: '#999',
+    marginBottom: 8,
+  },
+  vehicleInfo: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  vehicleText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  passengerInfo: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  passengerText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  refreshButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f8ff',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: '#2E86AB',
+  },
+  refreshButtonText: {
+    color: '#2E86AB',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
   },
 });
 

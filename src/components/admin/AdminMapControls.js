@@ -27,6 +27,21 @@ const AdminMapControls = ({
           }
         </Text>
       </View>
+
+      {/* Map type selector will be injected by parent when provided via props */}
+      {typeof arguments[0] === 'object' && arguments[0].changeTileLayer ? (
+        <View style={styles.mapTypeRow}>
+          <TouchableOpacity style={[styles.mapTypeButton, arguments[0].mapStyle === 'standard' && styles.mapTypeButtonActive]} onPress={() => arguments[0].changeTileLayer('standard')}>
+            <Text style={[styles.mapTypeText, arguments[0].mapStyle === 'standard' && styles.mapTypeTextActive]}>Estándar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.mapTypeButton, arguments[0].mapStyle === 'cyclo' && styles.mapTypeButtonActive]} onPress={() => arguments[0].changeTileLayer('cyclo')}>
+            <Text style={[styles.mapTypeText, arguments[0].mapStyle === 'cyclo' && styles.mapTypeTextActive]}>Ciclista</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.mapTypeButton, arguments[0].mapStyle === 'transport' && styles.mapTypeButtonActive]} onPress={() => arguments[0].changeTileLayer('transport')}>
+            <Text style={[styles.mapTypeText, arguments[0].mapStyle === 'transport' && styles.mapTypeTextActive]}>Transporte</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </View>
   );
 };
@@ -78,6 +93,29 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'right',
     marginLeft: 8,
+  },
+  mapTypeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  mapTypeButton: {
+    flex: 1,
+    marginHorizontal: 4,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
+    alignItems: 'center',
+  },
+  mapTypeButtonActive: {
+    backgroundColor: '#1976D2',
+  },
+  mapTypeText: {
+    color: '#333',
+    fontWeight: '600',
+  },
+  mapTypeTextActive: {
+    color: '#fff'
   },
 });
 

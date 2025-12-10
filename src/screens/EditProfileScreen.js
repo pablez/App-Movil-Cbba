@@ -152,10 +152,11 @@ const EditProfileScreen = ({ navigation }) => {
     if (!localUri) return;
     setUploadingImage(true);
     try {
-      const uploaded = await uploadUserImages(user.uid, { profileImage: localUri }, (p) => {
+      const resp = await uploadUserImages(user.uid, { profileImage: localUri }, (p) => {
         // se podría mostrar progreso si se desea
-        // console.log('upload progress', p);
       });
+      // Compatibilidad: uploadUserImages ahora devuelve { uploaded, publicIds }
+      const uploaded = resp && (resp.uploaded || resp);
       const newUrl = uploaded && uploaded.profileImage ? uploaded.profileImage : null;
       if (newUrl) {
         const userRef = doc(db, 'users', user.uid);

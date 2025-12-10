@@ -466,6 +466,44 @@ const AdminMapScreen = ({ navigation, route }) => {
     }
   }, [currentRoute, mapReady]);
 
+  // Selector de tipo de mapa (tile layers)
+  const [mapStyle, setMapStyle] = React.useState('standard');
+
+  const TILE_STYLES = {
+    standard: {
+      url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      attribution: '© OpenStreetMap contributors'
+    },
+    cyclo: {
+      // CyclOSM tiles (publicly available mirror)
+      url: 'https://tiles-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
+      attribution: '© OpenStreetMap contributors — CyclOSM'
+    },
+    transport: {
+      // Carto Voyager as a transport-friendly basemap
+      url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+      attribution: '&copy; OpenStreetMap contributors & CARTO'
+    }
+  };
+
+  const changeTileLayer = (styleKey) => {
+    const style = TILE_STYLES[styleKey] || TILE_STYLES.standard;
+    setMapStyle(styleKey);
+    if (webViewRef.current && mapReady) {
+      const script = `if(window.setTileLayer) window.setTileLayer("${style.url}", "${style.attribution.replace(/\"/g,'\\\"')}");`;
+      try {
+        webViewRef.current.postMessage(script);
+        console.log('Enviado setTileLayer al WebView:', styleKey);
+      } catch (e) {
+        console.error('Error enviando setTileLayer:', e);
+      }
+    } else {
+      console.log('Tile layer pedido guardado hasta que el mapa esté listo:', styleKey);
+      // si el mapa no está listo, pendingCustomRoute logic manejará envíos pendientes; pero aquí guardamos pendingCustomRoute igual
+      setPendingCustomRoute(prev => ({ ...(prev || {}), _tileChange: styleKey }));
+    }
+  };
+
   // Procesar customRoute si llega en params (inmediato) — cubre caso cuando la pantalla ya está activa
   useEffect(() => {
     try {
@@ -535,6 +573,15 @@ const AdminMapScreen = ({ navigation, route }) => {
         try {
           webViewRef.current.postMessage(script);
           console.log('✅ pendingCustomRoute enviado:', cr.name || 'custom');
+          // Si se indicó un cambio de tiles junto con el pendingCustomRoute, aplicarlo ahora
+          if (cr._tileChange && TILE_STYLES[cr._tileChange]) {
+            const style = TILE_STYLES[cr._tileChange];
+            try {
+              const tileScript = `if(window.setTileLayer) window.setTileLayer("${style.url}", "${style.attribution.replace(/"/g,'\\"')}");`;
+              webViewRef.current.postMessage(tileScript);
+              console.log('✅ pending tile change aplicado:', cr._tileChange);
+            } catch (e) { console.error('Error aplicando pending tile change', e); }
+          }
         } catch (e) {
           console.error('❌ Error enviando pendingCustomRoute', e);
         }
@@ -630,18 +677,18 @@ const AdminMapScreen = ({ navigation, route }) => {
             });
 
             // Capa de tiles OpenStreetMap estándar (funciona sin API key)
-            const tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors',
-                maxZoom: 19,
-                tileSize: 256,
-                crossOrigin: true,
-                // Cache optimization
-                updateWhenIdle: true,
-                updateWhenZooming: false,
-                keepBuffer: 2
+            window.currentTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              attribution: '© OpenStreetMap contributors',
+              maxZoom: 19,
+              tileSize: 256,
+              crossOrigin: true,
+              // Cache optimization
+              updateWhenIdle: true,
+              updateWhenZooming: false,
+              keepBuffer: 2
             });
             
-            tileLayer.addTo(window.map);
+            window.currentTileLayer.addTo(window.map);
 
             // Variables globales para marcadores
             window.currentLocationMarker = null;
@@ -669,7 +716,7 @@ const AdminMapScreen = ({ navigation, route }) => {
 
             // Manejar carga del mapa
             let mapLoaded = false;
-            tileLayer.on('load', function() {
+            window.currentTileLayer.on('load', function() {
                 if (!mapLoaded) {
                     mapLoaded = true;
                     document.getElementById('loading').style.display = 'none';
@@ -677,7 +724,7 @@ const AdminMapScreen = ({ navigation, route }) => {
                     
                     if (window.ReactNativeWebView) {
                         window.ReactNativeWebView.postMessage('mapReady');
-                    }
+                      }
                 }
             });
 
@@ -691,6 +738,25 @@ const AdminMapScreen = ({ navigation, route }) => {
                     }
                 }
             }, 3000);
+
+            // Función pública para cambiar la capa de tiles dinámicamente
+            window.setTileLayer = function(url, attribution) {
+              try {
+                if (window.currentTileLayer) {
+                  try { window.map.removeLayer(window.currentTileLayer); } catch (e) { /* ignore */ }
+                  window.currentTileLayer = null;
+                }
+                window.currentTileLayer = L.tileLayer(url, {
+                  attribution: attribution || '',
+                  maxZoom: 19,
+                  tileSize: 256,
+                  crossOrigin: true
+                }).addTo(window.map);
+                console.log('Tile layer cambiada a', url);
+              } catch (e) {
+                console.error('Error cambiando tile layer', e);
+              }
+            };
 
       // Si React Native solicitó modo edición, habilitar captura de clicks y enviarlos
       window.adminEditMode = ${editMode ? 'true' : 'false'};
@@ -1209,6 +1275,27 @@ const AdminMapScreen = ({ navigation, route }) => {
             }
           </Text>
         </View>
+        {/* Selector de tipo de mapa */}
+        <View style={styles.mapTypeRow}>
+          <TouchableOpacity
+            style={[styles.mapTypeButton, mapStyle === 'standard' && styles.mapTypeButtonActive]}
+            onPress={() => changeTileLayer('standard')}
+          >
+            <Text style={[styles.mapTypeText, mapStyle === 'standard' && styles.mapTypeTextActive]}>Estándar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.mapTypeButton, mapStyle === 'cyclo' && styles.mapTypeButtonActive]}
+            onPress={() => changeTileLayer('cyclo')}
+          >
+            <Text style={[styles.mapTypeText, mapStyle === 'cyclo' && styles.mapTypeTextActive]}>Ciclista</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.mapTypeButton, mapStyle === 'transport' && styles.mapTypeButtonActive]}
+            onPress={() => changeTileLayer('transport')}
+          >
+            <Text style={[styles.mapTypeText, mapStyle === 'transport' && styles.mapTypeTextActive]}>Transporte</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Mapa - Sin márgenes para aprovechar toda la pantalla */}
@@ -1513,6 +1600,29 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#495057',
     fontWeight: '500',
+  },
+  mapTypeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  mapTypeButton: {
+    flex: 1,
+    marginHorizontal: 4,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
+    alignItems: 'center',
+  },
+  mapTypeButtonActive: {
+    backgroundColor: '#1976D2',
+  },
+  mapTypeText: {
+    color: '#333',
+    fontWeight: '600',
+  },
+  mapTypeTextActive: {
+    color: '#fff'
   },
 });
 
